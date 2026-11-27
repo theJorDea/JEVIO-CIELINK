@@ -1,0 +1,1 @@
+"""CIELINK training assistant."""

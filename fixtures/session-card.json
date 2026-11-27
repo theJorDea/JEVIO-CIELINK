@@ -1,0 +1,10 @@
+{
+  "context": {"session_id":"training-001","channel":"web","phone_number":null},
+  "status": "active",
+  "events": [
+    {"session_id":"training-001","sequence":1,"offset_ms":750,"type":"partial","revision":1,"text":"дом восемнадцать"},
+    {"session_id":"training-001","sequence":2,"offset_ms":1450,"type":"final","revision":2,"text":"дом восемнадцать, корпус второй"}
+  ],
+  "recording": null,
+  "outcome": null
+}
