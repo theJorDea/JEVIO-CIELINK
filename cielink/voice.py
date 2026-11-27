@@ -3,6 +3,8 @@ import asyncio
 import json
 from .consent import ConfirmedDialogue
 from .crm import OperationStore
+from .review import ReviewStore
+from dataclasses import asdict
 import os
 from .consultation import Consultation
 from .quotes import FixtureQuoteAdapter
@@ -62,6 +64,8 @@ async def voice_socket(ws: WebSocket):
     await ws.accept()
     sid = uuid4().hex
     state = SessionState(context=SessionContext(session_id=sid, channel='web'))
+    review = await asyncio.to_thread(ReviewStore)
+    await asyncio.to_thread(review.start_session, sid)
     await ws.send_json({'type': 'ready', 'session_id': sid, 'config': config.model_dump()})
     dsn = os.getenv('CIELINK_CRM_URL')
     if not dsn:
@@ -72,6 +76,10 @@ async def voice_socket(ws: WebSocket):
     consultation = ConfirmedDialogue(rules, store)
     active_reply = None
     started = False
+    spoken_text = None
+    spoken_offer = None
+    async def record(kind, offset, text=None):
+        await asyncio.to_thread(review.append_event, sid, kind, offset, text)
     seq = 0
     try:
         while True:
@@ -89,9 +97,11 @@ async def voice_socket(ws: WebSocket):
                         continue
                     if inp.type in ('playback_ended', 'text_displayed'):
                         consultation.delivered()
+                        await record('offer_verified', inp.offset_ms, json.dumps(spoken_offer, ensure_ascii=False))
                     started = inp.type == 'playback_started'
                     if not started:
                         active_reply = None
+                    await record(inp.type, inp.offset_ms, spoken_text if inp.type in ('playback_ended', 'text_displayed') else None)
                     seq += 1
                     await ws.send_json({'type': 'event', 'event': {**inp.model_dump(), 'session_id': sid, 'sequence': seq}})
                     continue
@@ -99,6 +109,7 @@ async def voice_socket(ws: WebSocket):
             except (ValidationError, ValueError):
                 await ws.send_json({'type': 'error', 'message': 'Некорректное событие или время реплики.'})
                 continue
+            await record(inp.type, inp.offset_ms, inp.text)
             state = result.state
             seq += 1
             await ws.send_json({'type': 'event', 'event': {**result.event.model_dump(), 'sequence': seq}})
@@ -107,6 +118,9 @@ async def voice_socket(ws: WebSocket):
             if isinstance(inp, FinalInput):
                 active_reply, started = uuid4().hex, False
                 text = await consultation.respond(state, inp.text)
+                spoken_text = text
+                spoken_offer = state.active_offer.model_dump(mode='json') if state.active_offer else None
+                await record('reply_generated', inp.offset_ms, text)
                 seq += 1
                 await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
                                     'session_id': sid, 'reply_id': active_reply, 'offset_ms': inp.offset_ms, 'text': text,
@@ -116,3 +130,7 @@ async def voice_socket(ws: WebSocket):
         return
     finally:
         await rules.reads.close()
+        receipt = asdict(consultation.receipt) if consultation.receipt else None
+        outcome = receipt['operation_type'] if receipt else ('no_action' if consultation.finished else 'disconnected')
+        await asyncio.to_thread(review.finish_session, sid, outcome, receipt=receipt,
+                                offer=spoken_offer, coverage_status=rules.coverage_status)

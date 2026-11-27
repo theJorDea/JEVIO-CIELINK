@@ -9,7 +9,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title="CIELINK", version="0.1.0")
 
     from .voice import router as voice_router
+    from .review import router as review_router
     app.include_router(voice_router)
+    app.include_router(review_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
