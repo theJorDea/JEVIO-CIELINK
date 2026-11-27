@@ -5,6 +5,7 @@ import pytest
 
 from cielink.consent import ConfirmedDialogue
 from cielink.consultation import Consultation
+from cielink.crm import OperationStore
 from cielink.domain import SessionContext, SessionState
 from cielink.quotes import FixtureQuoteAdapter
 
@@ -64,7 +65,34 @@ def test_equipment_and_unrecognized_followups_preserve_facts_not_consent(call):
     say('Можно подробнее?')
     assert state.address == address and state.active_offer == offer and dialogue.proposal is None
     say('У меня нет роутера')
-    for turn in ('да подключайте', 'А если иначе?', 'До 2200', 'Учебная 18 строение один'):
-        assert 'Оформить заявку?' not in say(turn)
+    for turn in ('угу', 'да оформляйте', 'А если иначе?', 'До 2200', 'Учебная 18 строение один'):
+        answer = say(turn)
+        assert 'Оформить заявку?' not in answer
+        if turn in ('угу', 'да оформляйте'):
+            assert 'роутер' in answer and 'адрес' not in answer.casefold()
         assert state.needs == ['роутер'] and state.active_offer is None and dialogue.proposal is None
     assert state.monthly_budget == 2200 and state.address.structure == '1'
+
+
+def test_price_question_then_order_intent_requires_fresh_delivered_confirmation(tmp_path):
+    store = OperationStore(f'sqlite:///{tmp_path / "orders.db"}')
+    state = SessionState(context=SessionContext(session_id='price', channel='web'))
+    dialogue = ConfirmedDialogue(Consultation(FixtureQuoteAdapter()), store)
+
+    def say(text):
+        return asyncio.run(dialogue.respond(state, text))
+
+    terms = say('Учебная 18 корпус один, до 2000')
+    old_key = dialogue.proposal.key
+    dialogue.delivered()
+    say('А сколько будет стоить после акции?')
+    assert dialogue.proposal is None
+    assert say('да оформляйте') == terms
+    new_key = dialogue.proposal.key
+    assert old_key != new_key and not dialogue.proposal.delivered
+    assert say('да оформляйте') == terms
+    assert store.lookup_operation(old_key) is None and store.lookup_operation(new_key) is None
+    dialogue.delivered()
+    say('да оформляйте')
+    receipt = store.lookup_operation(new_key)
+    assert receipt.operation_type == 'order' and receipt.confirmed_terms['monthly_budget'] == '2000'

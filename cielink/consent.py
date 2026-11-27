@@ -70,6 +70,11 @@ class ConfirmedDialogue:
                 return self._without_proposal(state)
             if not p.delivered or phrase not in _ALLOWED[p.kind]:
                 p.delivered = False
+                if phrase == 'да' and p.kind == 'order':
+                    cue = ' Чтобы подтвердить подключение, скажите: «да, оформляйте».'
+                    if not p.prompt.endswith(cue):
+                        p.prompt += cue
+                        p.terms['prompt'] = p.prompt
                 return p.prompt
             args = dict(session_id=state.context.session_id, operation_key=p.key,
                         operation_type=p.kind, confirmed_terms=p.terms)
@@ -97,6 +102,11 @@ class ConfirmedDialogue:
             kind = self.consultation.proposed_action
             if not kind:
                 return prompt
+        if kind == 'order':
+            self.last_order = (self.consultation._request(state, state.address), state.active_offer, prompt)
+        return self._propose(state, kind, prompt)
+
+    def _propose(self, state, kind, prompt):
         self.proposal = Proposal(kind, uuid4().hex, {
             'address': state.address.model_dump(mode='json') if state.address else None,
             'offer': state.active_offer.model_dump(mode='json') if state.active_offer and kind == 'order' else None,

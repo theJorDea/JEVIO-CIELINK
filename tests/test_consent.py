@@ -32,11 +32,14 @@ def test_interrupted_terms_cannot_be_accepted_and_ack_is_not_consent(case):
     d.delivered()
     assert say('да, я слышу') == terms and store.lookup_operation(key) is None
     d.delivered()
-    assert say('да') == terms and store.lookup_operation(key) is None
-    assert say('да, оформляйте') == terms and store.lookup_operation(key) is None
+    reprompt = say('да')
+    assert reprompt.startswith(terms) and 'скажите: «да, оформляйте»' in reprompt
+    assert say('да') == reprompt and store.lookup_operation(key) is None
+    assert say('да, оформляйте') == reprompt and store.lookup_operation(key) is None
     d.delivered()
     answer = say('да, оформляйте')
     receipt = store.lookup_operation(key)
+    assert receipt.confirmed_terms['prompt'] == reprompt
     assert receipt.operation_type == 'order' and answer == f'Сохранено. Номер {receipt.spoken_reference}.'
     assert say('да, подключайте') == f'Операция уже сохранена. Номер {receipt.spoken_reference}.'
 
