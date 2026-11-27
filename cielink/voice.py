@@ -5,6 +5,7 @@ from .consent import ConfirmedDialogue
 from .crm import OperationStore
 from .review import ReviewStore
 from dataclasses import asdict
+from anyio import CancelScope
 import os
 from .consultation import Consultation
 from .quotes import FixtureQuoteAdapter
@@ -129,8 +130,11 @@ async def voice_socket(ws: WebSocket):
     except WebSocketDisconnect:
         return
     finally:
+        # The ASGI host may cancel the socket scope immediately on disconnect.
+        # Persist the terminal state before draining cancellable speculative reads.
+        with CancelScope(shield=True):
+            receipt = asdict(consultation.receipt) if consultation.receipt else None
+            outcome = receipt['operation_type'] if receipt else ('no_action' if consultation.finished else 'disconnected')
+            await asyncio.to_thread(review.finish_session, sid, outcome, receipt=receipt,
+                                    offer=spoken_offer, coverage_status=rules.coverage_status)
         await rules.reads.close()
-        receipt = asdict(consultation.receipt) if consultation.receipt else None
-        outcome = receipt['operation_type'] if receipt else ('no_action' if consultation.finished else 'disconnected')
-        await asyncio.to_thread(review.finish_session, sid, outcome, receipt=receipt,
-                                offer=spoken_offer, coverage_status=rules.coverage_status)
