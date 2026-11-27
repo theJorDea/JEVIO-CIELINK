@@ -126,7 +126,8 @@ async def voice_socket(ws: WebSocket):
                 await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
                                     'session_id': sid, 'reply_id': active_reply, 'offset_ms': inp.offset_ms, 'text': text,
                                     'reads': list(rules.reads.trace)}})
-                await ws.send_json({'type': 'reply', 'text': text, 'reply_id': active_reply})
+                await ws.send_json({'type': 'reply', 'text': text, 'reply_id': active_reply,
+                                    'input_offset_ms': inp.offset_ms})
     except WebSocketDisconnect:
         return
     finally:

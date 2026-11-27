@@ -2,7 +2,7 @@
 
 const el = id => document.getElementById(id);
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let socket, config, recognition, playback, origin;
+let socket, config, recognition, playback, origin, lastOffset = -1, latestInput = -1;
 const elapsed = () => Math.round(performance.now() - origin);
 
 function controls() {
@@ -20,7 +20,9 @@ function log(direction, message) {
 
 function send(type, fields) {
   if (!config || socket?.readyState !== WebSocket.OPEN) return;
-  const message = { type, ...fields, offset_ms: elapsed() };
+  lastOffset = Math.max(elapsed(), lastOffset + 1);
+  if (type === "partial" || type === "final") latestInput = lastOffset;
+  const message = { type, ...fields, offset_ms: lastOffset };
   socket.send(JSON.stringify(message));
   log("→", message);
 }
@@ -35,7 +37,9 @@ function interrupt() {
   controls();
 }
 
-function reply({ reply_id, text }) {
+function reply({ reply_id, text, input_offset_ms }) {
+  // A correction may already be on its way while the old server read is finishing.
+  if (input_offset_ms !== undefined && input_offset_ms < latestInput) return;
   interrupt();
   el("reply").textContent = text;
   if (config.tts === "text") { send("text_displayed", { reply_id }); return; }
@@ -121,6 +125,7 @@ function shutdown(message) {
 
 el("connect").onclick = () => {
   origin = performance.now();
+  latestInput = lastOffset = -1;
   el("log").textContent = "";
   el("heard").textContent = el("reply").textContent = "—";
   el("status").textContent = "Подключение…";

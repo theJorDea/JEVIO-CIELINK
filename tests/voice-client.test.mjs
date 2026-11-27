@@ -73,6 +73,17 @@ test('text mode supports manual input, literal replies and server timing details
   assert.match(c.ui.log.textContent, /"offset_ms":42,"duration_ms":83/);
 });
 
+test('correction in flight suppresses old reply before display or synthesis', () => {
+  const c = client();
+  c.ui.text.value = 'корпус один'; c.ui.form.onsubmit({ preventDefault() {} });
+  const first = c.sent.at(-1).offset_ms;
+  c.ui.text.value = 'стоп, корпус второй'; c.ui.partial.onclick();
+  c.receive({ type: 'reply', reply_id: 'old', input_offset_ms: first, text: 'старые условия' });
+  assert.equal(c.speech, undefined);
+  assert.notEqual(c.ui.reply.textContent, 'старые условия');
+  assert.ok(!c.sent.some(m => m.reply_id === 'old'));
+});
+
 test('permission failure leaves manual input available and preserves the error on end', () => {
   const c = client();
   c.ui.mic.onclick();
