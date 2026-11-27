@@ -42,7 +42,7 @@ class ConfirmedDialogue:
             return f'Операция уже сохранена. Номер {self.receipt.receipt_id}.'
         if self.finished:
             return 'Обращение завершено без заявки.'
-        if phrase in {'нет', 'не надо', 'не оформляйте', 'отказываюсь', 'не хочу'}:
+        if phrase in {'нет', 'не надо', 'не оформляйте', 'отказываюсь', 'не хочу', 'подумаю', 'я подумаю', 'мне надо подумать'}:
             self.proposal = None
             self.finished = True
             return 'Хорошо, ничего не оформляю.'

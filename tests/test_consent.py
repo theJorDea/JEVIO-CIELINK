@@ -55,6 +55,16 @@ def test_decline_or_no_service_never_creates_order(case):
     assert d.finished and d.receipt is None
 
 
+def test_deferral_after_price_retires_offer(case):
+    dialogue, say, store = case
+    say('Учебная 18 корпус один')
+    key = dialogue.proposal.key
+    dialogue.delivered()
+    assert 'не оформляю' in say('Я подумаю')
+    say('да, подключайте')
+    assert dialogue.finished and store.lookup_operation(key) is None
+
+
 def test_explicit_handoff_or_refusal(case):
     d, say, store = case
     say('хочу оператора'); key = d.proposal.key; d.delivered()
