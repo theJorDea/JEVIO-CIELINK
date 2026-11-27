@@ -1,0 +1,109 @@
+import asyncio
+from io import StringIO
+import sqlite3
+
+import pytest
+
+from cielink import asterisk as a
+
+
+PLAY = '200 result=0 endpos=8000'
+REC = '200 result=8453 (timeout) endpos=16000'  # ast_waitfor may return remaining ms
+UP = '200 result=6'
+ADDRESS = 'учебная улица дом восемнадцать корпус один'
+
+
+class Speech:
+    def __init__(self, texts):
+        self.texts = iter(texts)
+
+    def synthesize(self, text, base):
+        assert text and base.name == 'prompt'
+
+    def recognize(self, base):
+        assert base.name == 'caller'
+        return next(self.texts)
+
+
+@pytest.mark.parametrize('texts,replies,error,route,outcome,count', [
+    ([ADDRESS, 'да подключайте'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'DONE', 'order', 1),
+    (['хочу оператора', 'да'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'OPERATOR', 'handoff', 1),
+    ([ADDRESS, 'нет'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'DONE', 'no_action', 0),
+    ([ADDRESS], [PLAY, REC, UP, '200 result=-1 endpos=13', '511 Command Not Permitted on a dead channel'], a.Hangup, None, 'disconnected', 0),
+    ([ADDRESS], [PLAY, REC, UP, '200 result=-1 endpos=0', UP], RuntimeError, None, 'engine_failure', 0),
+    ([ADDRESS, 'да'], [PLAY, REC, UP, PLAY, REC, 'HANGUP'], a.Hangup, None, 'disconnected', 0),
+    ([], [PLAY, '200 result=-1 (hangup) endpos=10'], a.Hangup, None, 'disconnected', 0),
+    ([''], [PLAY, REC, UP], RuntimeError, None, 'engine_failure', 0),
+])
+def test_agi_call(tmp_path, texts, replies, error, route, outcome, count):
+    commands = StringIO()
+    agi = a.AGI(StringIO('agi_channel: test\n\n' + '\n'.join(replies) + '\n'), commands)
+    review = a.ReviewStore(tmp_path / 'review.db')
+    store = a.OperationStore(f'sqlite:///{tmp_path}/crm.db')
+    call = a.run_call(agi, Speech(texts), store, review, tmp_path)
+    if error:
+        with pytest.raises(error):
+            asyncio.run(call)
+    else:
+        assert asyncio.run(call) == route
+    assert len(commands.getvalue().splitlines()) == len(replies)
+    session, = review.list_sessions()
+    detail = review.detail(session['id'])
+    assert session['outcome'] == outcome
+    assert detail['tracks'] == []
+    events = detail['events']
+    completed = [e['text'] for e in events if e['type'] == 'playback_ended']
+    assert len(completed) == replies.count(PLAY)
+    if any('endpos=13' in r or 'endpos=0' in r for r in replies):
+        assert events[-1]['type'] == 'playback_interrupted'
+    with sqlite3.connect(tmp_path / 'crm.db') as conn:
+        assert conn.execute('SELECT count(*) FROM crm_operations').fetchone() == (count,)
+    if count:
+        assert detail['receipt']['confirmed_terms']['prompt'] == completed[-2]
+        assert detail['receipt']['receipt_id'] in completed[-1]
+
+
+@pytest.mark.parametrize('piper', [None, '/models/ru.onnx'])
+def test_offline_audio_conversion_and_final_segments(monkeypatch, tmp_path, piper):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def command(args, data=None, *, capture=False):
+        calls.append((args, data))
+        return b'\0' * 10000 if capture else None
+
+    class Recognizer:
+        def __init__(self, model, rate):
+            assert model == 'local' and rate == 16000
+
+        def AcceptWaveform(self, chunk):
+            return len(chunk) == 8000
+
+        def Result(self):
+            return '{"text":"не"}'
+
+        def FinalResult(self):
+            return '{"text":"надо"}'
+
+    monkeypatch.setitem(a.sys.modules, 'vosk', SimpleNamespace(KaldiRecognizer=Recognizer))
+    monkeypatch.setattr(a, 'audio_command', command)
+    speech = a.LocalSpeech.__new__(a.LocalSpeech)
+    speech.model, speech.piper = 'local', piper
+    speech.synthesize('Добрый день.', tmp_path / 'prompt')
+    assert calls[0][0][0] == ('piper' if piper else 'espeak-ng')
+    assert calls[0][1].decode().strip() == 'Добрый день.'
+    assert '8000' in calls[1][0] and calls[1][0][-1] == str(tmp_path / 'prompt.wav')
+    assert speech.recognize(tmp_path / 'caller') == 'не надо'
+    assert calls[2][0][1] == str(tmp_path / 'caller.wav') and '16000' in calls[2][0]
+
+
+def test_worker_missing_model_leaves_operator_default(monkeypatch, tmp_path):
+    monkeypatch.setenv('CIELINK_REVIEW_DB', str(tmp_path / 'review.db'))
+    monkeypatch.setenv('CIELINK_CRM_URL', f'sqlite:///{tmp_path}/crm.db')
+    monkeypatch.delenv('CIELINK_VOSK_MODEL', raising=False)
+    monkeypatch.setattr(a.sys, 'stdin', StringIO('agi_request: cielink-agi\n\n'))
+    monkeypatch.setattr(a.sys, 'stdout', StringIO())
+    monkeypatch.setattr(a.os, 'umask', lambda _: None)
+    assert a.main() == 1
+    assert not a.sys.stdout.getvalue()

@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+cd /opt/cielink
+export PATH="/opt/cielink/.venv/bin:/usr/bin:/bin"
+export CIELINK_VOSK_MODEL=/opt/cielink/models/vosk-ru
+export CIELINK_REVIEW_DB=/var/lib/cielink-lab/review.sqlite3
+export CIELINK_CRM_URL=sqlite:////var/lib/cielink-lab/crm.sqlite3
+exec python -m cielink.asterisk
