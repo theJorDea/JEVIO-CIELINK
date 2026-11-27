@@ -1,4 +1,5 @@
-"""Inbound, half-duplex local AGI/EAGI worker. stdout belongs to Asterisk."""
+"""Inbound local AGI/EAGI worker. stdout belongs to Asterisk."""
+from array import array
 import asyncio
 from dataclasses import asdict
 import json
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 
 from .consent import ConfirmedDialogue
 from .consultation import Consultation
@@ -25,8 +27,11 @@ class Hangup(Exception):
 class AGI:
     def __init__(self, source, sink):
         self.source, self.sink = source, sink
-        while self.line():  # consume AGI environment; do not retain caller IDs
-            pass
+        self.audio_fd = None
+        while line := self.line():  # do not retain caller IDs
+            if line == 'agi_enhanced: 1.0':
+                self.audio_fd = 3
+                os.set_blocking(3, False)
 
     def line(self):
         line = self.source.readline()
@@ -53,9 +58,58 @@ class AGI:
             self.up()  # -1 can also mean an unreadable file
             raise RuntimeError('incomplete playback')
 
-    def record(self, base):
+    def read_audio(self):
+        data = bytearray()
+        while True:
+            try:
+                block = os.read(self.audio_fd, 8192)
+            except BlockingIOError:
+                return data
+            if not block:
+                raise Hangup
+            data.extend(block)
+
+    def play_prompt(self, base, *, detect=True):
+        if self.audio_fd is None:
+            self.play(base)
+            return True
+
+        # res_agi forwards incoming voice to fd 3 during STREAM FILE. Use
+        # bounded files so we never have to cancel an in-flight AGI command.
+        part = base.with_name('segment')
+        pending = bytearray()
+        voiced = 0
+        self.read_audio()  # discard input queued before playback
+        with wave.open(str(base.with_suffix('.wav')), 'rb') as src:
+            if (src.getframerate(), src.getnchannels(), src.getsampwidth()) != (8000, 1, 2) or not src.getnframes():
+                raise ValueError('expected nonempty 8 kHz mono PCM prompt')
+            remaining = src.getnframes()
+            while remaining:
+                count = min(remaining, 1600)  # at most 200 ms
+                frames = src.readframes(count)
+                if len(frames) != count * 2:
+                    raise ValueError('truncated prompt')
+                remaining -= count
+                with wave.open(str(part.with_suffix('.wav')), 'wb') as dst:
+                    dst.setparams((1, 2, 8000, count, 'NONE', 'not compressed'))
+                    dst.writeframes(frames)
+                self.play(part)
+                audio = self.read_audio()
+                if detect:
+                    pending.extend(audio)
+                    while len(pending) >= 320:  # 20 ms of native-endian slin
+                        samples = array('h', pending[:320])
+                        del pending[:320]
+                        loud = sum(v*v for v in samples) >= 160 * 500**2
+                        voiced = voiced + 1 if loud else 0
+                        if voiced == 3:
+                            return False
+        return True
+
+    def record(self, base, *, beep=False):
         start = time.monotonic()
-        if self.command(f'RECORD FILE "{base}" wav "" 12000 0 s=2') < 0:
+        cue = ' BEEP' if beep else ''
+        if self.command(f'RECORD FILE "{base}" wav "" 12000 0{cue} s=2') < 0:
             self.up()
             raise RuntimeError('recording failed')
         if time.monotonic() - start >= 12:
@@ -107,29 +161,41 @@ async def run_call(agi, speech, store, review, directory):
     def offset():
         return int((time.monotonic() - start) * 1000)
 
+    def play(text, *, detect):
+        review.append_event(sid, 'reply_generated', offset(), text)
+        speech.synthesize(text, directory / 'prompt')
+        try:
+            complete = agi.play_prompt(directory / 'prompt', detect=detect)
+        except Exception:
+            review.append_event(sid, 'playback_interrupted', offset())
+            raise
+        if not complete:
+            review.append_event(sid, 'playback_interrupted', offset())
+        return complete
+
     outcome = 'engine_failure'
     offer = None
     reply = 'Здравствуйте. Это учебный помощник. Назовите адрес подключения.'
     try:
         for turn in range(21):
-            review.append_event(sid, 'reply_generated', offset(), reply)
-            speech.synthesize(reply, directory / 'prompt')
-            try:
-                agi.play(directory / 'prompt')
-            except Exception:
-                review.append_event(sid, 'playback_interrupted', offset())
-                raise
-            dialogue.delivered()
-            offer = state.active_offer.model_dump(mode='json') if state.active_offer else None
-            end = offset()
-            review.append_event(sid, 'offer_verified', end, json.dumps(offer, ensure_ascii=False))
-            review.append_event(sid, 'playback_ended', end, reply)
-            if dialogue.receipt or dialogue.finished:
-                outcome = 'no_action'
-                return 'OPERATOR' if dialogue.receipt and dialogue.receipt.operation_type == 'handoff' else 'DONE'
+            terminal = bool(dialogue.receipt or dialogue.finished)
+            complete = play(reply, detect=not terminal)
+            if complete:
+                dialogue.delivered()
+                offer = state.active_offer.model_dump(mode='json') if state.active_offer else None
+                end = offset()
+                review.append_event(sid, 'offer_verified', end, json.dumps(offer, ensure_ascii=False))
+                review.append_event(sid, 'playback_ended', end, reply)
+                if terminal:
+                    outcome = 'no_action'
+                    return 'OPERATOR' if dialogue.receipt and dialogue.receipt.operation_type == 'handoff' else 'DONE'
             if turn == 20:
                 break
-            agi.record(directory / 'caller')
+            if not complete:
+                cue = 'Я вас слышу. После сигнала повторите фразу с самого начала.'
+                play(cue, detect=False)  # never delivers a pending proposal
+                review.append_event(sid, 'playback_ended', offset(), cue)
+            agi.record(directory / 'caller', beep=not complete)
             text = speech.recognize(directory / 'caller')
             agi.up()  # caller may have left while offline recognition ran
             if not text:

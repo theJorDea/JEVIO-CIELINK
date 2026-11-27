@@ -1,6 +1,8 @@
 import asyncio
 from io import StringIO
 import sqlite3
+import struct
+import wave
 
 import pytest
 
@@ -61,6 +63,121 @@ def test_agi_call(tmp_path, texts, replies, error, route, outcome, count):
     if count:
         assert detail['receipt']['confirmed_terms']['prompt'] == completed[-2]
         assert detail['receipt']['receipt_id'] in completed[-1]
+
+
+@pytest.mark.parametrize('enhanced,expected', [('1.0', [(3, False)]), ('0.0', [])])
+def test_agi_detects_enhanced_audio(monkeypatch, enhanced, expected):
+    calls = []
+    monkeypatch.setattr(a.os, 'set_blocking', lambda fd, flag: calls.append((fd, flag)))
+    a.AGI(StringIO(f'agi_channel: test\nagi_enhanced: {enhanced}\n\n'), StringIO())
+    assert calls == expected
+
+
+def test_read_audio_returns_all_available_bytes(monkeypatch):
+    monkeypatch.setattr(a.os, 'set_blocking', lambda *_: None)
+    agi = a.AGI(StringIO('agi_enhanced: 1.0\n\n'), StringIO())
+    blocks = iter([b'one', b'two'])
+
+    def read(fd, size):
+        assert fd == 3
+        if block := next(blocks, None):
+            return block
+        raise BlockingIOError
+
+    monkeypatch.setattr(a.os, 'read', read)
+    data = agi.read_audio()
+    assert isinstance(data, bytes) and data == b'onetwo'
+
+
+@pytest.mark.parametrize('options,last_level,completed', [
+    ({}, 499, True), ({}, 500, False), ({'detect': False}, 500, True),
+])
+def test_play_prompt_checks_audio_between_wav_chunks(tmp_path, monkeypatch, options, last_level, completed):
+    monkeypatch.setattr(a.os, 'set_blocking', lambda *_: None)
+    agi = a.AGI(StringIO('agi_enhanced: 1.0\n\n'), StringIO())
+    base = tmp_path / 'prompt'
+    pcm = struct.pack('<3350h', *range(3350))
+    with wave.open(str(base.with_suffix('.wav')), 'wb') as wav:
+        wav.setparams((1, 2, 8000, 0, 'NONE', 'not compressed'))
+        wav.writeframes(pcm)
+
+    def frame(level):  # zero mean, RMS == level; 20 ms at 8 kHz
+        return struct.pack('<hh', level, -level) * 80
+
+    # Ignore stale speech. Two loud frames, a quiet reset, then two loud
+    # frames still aren't speech until the next read completes the streak.
+    reads = iter([frame(900) * 3, frame(500) * 2 + frame(499) + frame(500) * 2,
+                  frame(last_level), b''])
+    events = []
+
+    def read_audio():
+        events.append('drain')
+        return next(reads)
+
+    def play(chunk):
+        with wave.open(str(chunk.with_suffix('.wav')), 'rb') as wav:
+            assert (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) == (1, 2, 8000)
+            events.append(wav.readframes(wav.getnframes()))
+
+    monkeypatch.setattr(agi, 'read_audio', read_audio)
+    monkeypatch.setattr(agi, 'play', play)
+    assert agi.play_prompt(base, **options) is completed
+    expected = ['drain', pcm[:3200], 'drain', pcm[3200:6400], 'drain']
+    assert events == expected + ([pcm[6400:], 'drain'] if completed else [])
+
+
+def test_interrupted_offer_requires_fresh_confirmation(tmp_path, monkeypatch):
+    monkeypatch.setattr(a.os, 'set_blocking', lambda *_: None)
+    agi = a.AGI(StringIO('agi_enhanced: 1.0\n\n'), StringIO())
+    review = a.ReviewStore(tmp_path / 'review.db')
+    store = a.OperationStore(f'sqlite:///{tmp_path}/crm.db')
+    turns = []
+    prompts = {}
+    recorded = []
+    answers = iter([ADDRESS, 'да подключайте', 'да подключайте'])
+
+    class Caller:
+        def synthesize(self, text, base):
+            prompts[base] = text
+
+        def recognize(self, base):
+            assert recorded.pop() == base  # cannot recognize twice from one recording
+            text = next(answers)
+            turns.append(('answer', text))
+            return text
+
+    def play_prompt(base, *, detect):
+        assert base == tmp_path / 'prompt'
+        turns.append(('prompt' if detect else 'play', prompts[base]))
+        return not detect or len(turns) != 3  # interrupt the first offer
+
+    def record(base, *, beep=False):
+        assert not recorded
+        assert beep == (turns[-1][0] == 'play')
+        with sqlite3.connect(tmp_path / 'crm.db') as db:
+            assert db.execute('SELECT count(*) FROM crm_operations').fetchone() == (0,)
+        recorded.append(base)
+
+    monkeypatch.setattr(agi, 'play_prompt', play_prompt)
+    monkeypatch.setattr(agi, 'record', record)
+    monkeypatch.setattr(agi, 'up', lambda: None)
+    assert asyncio.run(a.run_call(agi, Caller(), store, review, tmp_path)) == 'DONE'
+    greeting, address, interrupted, instruction, affirmative, replay, confirmation, receipt = turns
+    assert address == ('answer', ADDRESS)
+    assert instruction[0] == 'play' and 'повтор' in instruction[1].lower()
+    assert affirmative == confirmation == ('answer', 'да подключайте')
+    assert interrupted == replay == ('prompt', replay[1])
+    session, = review.list_sessions()
+    detail = review.detail(session['id'])
+    assert [e['type'] for e in detail['events'] if e['text'] == replay[1]] == [
+        'reply_generated', 'reply_generated', 'playback_ended',
+    ]
+    assert sum(e['type'] == 'playback_interrupted' for e in detail['events']) == 1
+    assert detail['receipt']['confirmed_terms']['prompt'] == replay[1]
+    assert receipt[0] == 'play'
+    assert detail['receipt']['receipt_id'] in receipt[1]
+    with sqlite3.connect(tmp_path / 'crm.db') as db:
+        assert db.execute('SELECT count(*) FROM crm_operations').fetchone() == (1,)
 
 
 @pytest.mark.parametrize('piper', [None, '/models/ru.onnx'])
