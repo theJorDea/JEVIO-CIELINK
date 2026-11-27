@@ -64,7 +64,7 @@ class AGI:
             try:
                 block = os.read(self.audio_fd, 8192)
             except BlockingIOError:
-                return data
+                return bytes(data)
             if not block:
                 raise Hangup
             data.extend(block)

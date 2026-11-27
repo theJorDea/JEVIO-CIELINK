@@ -151,20 +151,23 @@ def test_interrupted_offer_requires_fresh_confirmation(tmp_path, monkeypatch):
         turns.append(('prompt' if detect else 'play', prompts[base]))
         return not detect or len(turns) != 3  # interrupt the first offer
 
-    def record(base, *, beep=False):
+    def command(line):
         assert not recorded
-        assert beep == (turns[-1][0] == 'play')
+        base = tmp_path / 'caller'
+        suffix = '0 BEEP s=2' if turns[-1][0] == 'play' else '0 s=2'
+        assert line == f'RECORD FILE "{base}" wav "" 12000 {suffix}'
         with sqlite3.connect(tmp_path / 'crm.db') as db:
             assert db.execute('SELECT count(*) FROM crm_operations').fetchone() == (0,)
         recorded.append(base)
+        return 0
 
     monkeypatch.setattr(agi, 'play_prompt', play_prompt)
-    monkeypatch.setattr(agi, 'record', record)
+    monkeypatch.setattr(agi, 'command', command)
     monkeypatch.setattr(agi, 'up', lambda: None)
     assert asyncio.run(a.run_call(agi, Caller(), store, review, tmp_path)) == 'DONE'
     greeting, address, interrupted, instruction, affirmative, replay, confirmation, receipt = turns
     assert address == ('answer', ADDRESS)
-    assert instruction[0] == 'play' and 'повтор' in instruction[1].lower()
+    assert instruction == ('play', 'Я вас слышу. После сигнала повторите фразу с самого начала.')
     assert affirmative == confirmation == ('answer', 'да подключайте')
     assert interrupted == replay == ('prompt', replay[1])
     session, = review.list_sessions()
