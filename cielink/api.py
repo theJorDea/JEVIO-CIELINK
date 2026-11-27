@@ -8,6 +8,9 @@ def create_app() -> FastAPI:
         raise ValueError("Only CIELINK_MODE=training is implemented")
     app = FastAPI(title="CIELINK", version="0.1.0")
 
+    from .voice import router as voice_router
+    app.include_router(voice_router)
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "mode": "training"}

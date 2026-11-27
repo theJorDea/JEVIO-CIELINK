@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Проверка голосового диалога — CIELINK</title>
+  <style>
+    body { max-width: 48rem; margin: auto; padding: 1rem; font: 1rem/1.5 system-ui, sans-serif; }
+    button, input { font: inherit; padding: .4rem; margin: .2rem 0; }
+    input { width: 100%; box-sizing: border-box; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  </style>
+  <script src="/static/voice.js" defer></script>
+</head>
+<body><main>
+  <h1>Проверка голосового диалога</h1>
+  <p>Начните сеанс и введите фразу или включите микрофон. При распознавании речи браузер может отправлять аудио внешнему сервису. Для проверки без микрофона используйте ручной ввод.</p>
+  <button id="connect">Начать сеанс</button>
+  <button id="disconnect" disabled>Завершить сеанс</button>
+  <p id="status" role="status">Нет соединения.</p>
+  <h2>Голос</h2>
+  <button id="mic" disabled>Включить микрофон</button>
+  <button id="stop" disabled>Остановить озвучивание</button>
+  <p id="micStatus" role="status">Микрофон выключен.</p>
+  <p id="ttsStatus" role="status">Озвучивание не активно.</p>
+  <h2>Ручной ввод</h2>
+  <form id="form">
+    <label for="text">Текст реплики</label>
+    <input id="text" required maxlength="2000">
+    <button id="final" disabled>Отправить реплику</button>
+    <button type="button" id="partial" disabled>Отправить промежуточный текст</button>
+  </form>
+  <p>Распознано: <span id="heard">—</span></p>
+  <p role="status">Ответ: <span id="reply">—</span></p>
+  <h2>Журнал событий</h2>
+  <p>Время от начала соединения в миллисекундах. Стрелка → означает отправку, ← — получение.</p>
+  <pre id="log" aria-label="Журнал событий"></pre>
+</main></body>
+</html>
