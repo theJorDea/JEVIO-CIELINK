@@ -103,8 +103,12 @@ class Consultation:
         offer = options.offers[0]
         state.active_offer = offer
         name = self.quotes.offers[offer.offer_id]['name']
-        return (f'{description}: доступен {name}. Сегодня внести {offer.advance + sum(offer.mandatory_charges.values())} рублей, '
-                f'ежемесячно {offer.periods[-1].monthly_price} рублей. Это учебное предложение. Оформить заявку?')
+        fees = sum(offer.mandatory_charges.values())
+        prices = '; затем '.join(f'ежемесячно {p.monthly_price} рублей' +
+                                 (f' в течение {p.months} мес.' if p.months else '') for p in offer.periods)
+        return (f'{description}: доступен {name}. Сегодня внести {offer.advance + fees} рублей: '
+                f'аванс {offer.advance}, обязательные доплаты {fees}. Далее {prices}. '
+                f'{offer.conditions} Оформить заявку?')
 
     @staticmethod
     def describe(address: Address) -> str:

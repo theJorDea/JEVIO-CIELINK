@@ -26,6 +26,7 @@ def case():
 def test_interrupted_terms_cannot_be_accepted_and_ack_is_not_consent(case):
     d, say, store = case
     terms = say('Учебная 18 корпус один')
+    assert all(s in terms for s in ('аванс 1700', 'обязательные доплаты 0', 'ежемесячно 1700', 'собственный роутер'))
     key = d.proposal.key
     assert say('да, подключайте') == terms  # client interrupted before price
     d.delivered()
