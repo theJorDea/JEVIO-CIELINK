@@ -29,6 +29,6 @@ def test_socket_to_live_card_and_receipt(monkeypatch):
                 result = client.get(path).json()
                 if result['status'] == 'finished': break
                 time.sleep(.01)
-            assert result['outcome'] == 'coverage_request' and result['receipt']['receipt_id'] in receipt_text
+            assert result['outcome'] == 'coverage_request' and receipt_text.endswith(f"Номер {result['receipt']['spoken_reference']}.")
             assert result['coverage_status'] == 'unknown' and not result['tracks']
             assert ReviewStore(review_db).analyze_next() == 'complete'

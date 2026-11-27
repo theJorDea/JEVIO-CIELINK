@@ -10,7 +10,10 @@ request = dict(session_id='demo:call-17', operation_key='demo:call-17:confirmati
                confirmed_terms={'house_id': 'demo-42', 'revision': 2})
 receipt = store.record_operation(**request)
 assert store.lookup_operation(request['operation_key']) == receipt
+assert store.lookup_reference(receipt.spoken_reference) == receipt  # поиск для оператора
 ```
+
+Клиент слышит только `spoken_reference`: число от 1 до 99 999 999, уникальное среди всех сессий и типов операций одной CRM. Это не пароль. Номера могут иметь пропуски, не переиспользуются после удаления строки, при исчерпании запись завершится ошибкой. Оператор находит квитанцию через `lookup_reference` по уникальному индексу; `receipt_id` остаётся внутренним UUID. Простое «да» никогда не записывает действие. «Да, оформляйте» подтверждает только полностью доставленное актуальное предложение подключения.
 
 Квитанция содержит `session_id` и `sequence_no`: номер действия внутри сессии, начиная с 1, в порядке записи, а не начала запроса. В PostgreSQL транзакция берёт advisory lock по хешу `session_id`; в SQLite блокировка писателя берётся до выбора следующего номера. Повтор и конфликт не расходуют номер.
 
@@ -22,6 +25,6 @@ assert store.lookup_operation(request['operation_key']) == receipt
 
 ## Запуск
 
-- SQLite входит в Python. `sqlite:///crm.sqlite3` создаёт файл в текущем каталоге и применяет `migrations/002_operations.sql`; родительский каталог должен существовать. Сохраняйте файл между запусками.
-- Для PostgreSQL нужны psycopg 3 (`psycopg[binary]>=3,<4`), та же схема и обычный уровень изоляции `READ COMMITTED`. Примените `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_operations.sql` к выбранной базе, затем передайте её `postgresql://...` в `OperationStore`. Пересоздавать том не нужно.
+- SQLite входит в Python. `sqlite:///crm.sqlite3` создаёт файл в текущем каталоге и применяет `002_operations.sql` и `sqlite/003_spoken_reference.sql` из `migrations` автоматически в транзакции, в том числе для существующих строк; родительский каталог должен существовать. Сохраняйте файл между запусками.
+- Для PostgreSQL нужны psycopg 3 (`psycopg[binary]>=3,<4`), та же схема и обычный уровень изоляции `READ COMMITTED`. Примените `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/002_operations.sql -f migrations/003_spoken_reference.sql` к выбранной базе, затем передайте её `postgresql://...` в `OperationStore`. Пересоздавать том не нужно.
 - `python -m pytest tests/test_crm.py` проверяет SQLite. Для тех же проверок PostgreSQL установите `CIELINK_TEST_POSTGRES_URL` на DSN **учебной тестовой базы**; тесты сами создают таблицу и используют уникальные ключи.

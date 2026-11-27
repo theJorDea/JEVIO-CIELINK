@@ -141,6 +141,7 @@ class SessionState(Contract):
     monthly_budget: Rubles | None = None
     needs: list[str] = Field(default_factory=list)
     revisions: dict[str, NonNegativeInt] = Field(default_factory=dict)
+    pending_clarification: Literal['corpus_2', 'building_component'] | None = None
     active_offer: Offer | None = None
     pending_confirmation: PendingConfirmation | None = None
     sequence: NonNegativeInt = 0

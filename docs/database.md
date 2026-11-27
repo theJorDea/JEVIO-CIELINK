@@ -29,7 +29,13 @@ ROLLBACK;
 
 ## Повторный запуск
 
-`docker compose down` останавливает контейнер, сохраняя данные в томе `pgdata`. Повторите `docker compose up -d --wait db` для запуска с теми же данными. PostgreSQL выполняет `migrations/001_initial.sql` **только при первом старте с пустым томом**; перезапуск не применяет изменения SQL к существующей базе.
+`docker compose down` останавливает контейнер, сохраняя данные в томе `pgdata`. Повторите `docker compose up -d --wait db` для запуска с теми же данными. PostgreSQL выполняет SQL-файлы верхнего уровня `migrations/` **только при первом старте с пустым томом**. На существующем томе примените миграции CRM без удаления данных:
+
+```sh
+docker compose exec db psql -U cielink -d cielink -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/002_operations.sql -f /docker-entrypoint-initdb.d/003_spoken_reference.sql
+```
+
+Существующим квитанциям присваиваются номера для поиска; UUID и условия не меняются. Миграцию CRM можно запускать повторно.
 
 Чтобы проверить инициализацию с нуля, выполните команды ниже **только если локальные данные больше не нужны**:
 

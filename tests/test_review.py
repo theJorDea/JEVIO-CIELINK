@@ -76,11 +76,11 @@ def test_delivery_audit_uses_only_bound_verified_evidence(store):
     deliver(6, 'Ежемесячно 700 рублей.', {'periods': [{'monthly_price': '700'}, {'monthly_price': '800'}]})
     deliver(7, 'Не передам вопрос специалисту. Передать вопрос специалисту?', None)
     deliver(8, 'Передам вопрос специалисту.', None)
-    deliver(9, 'Сохранено. Номер abc.', None)
+    deliver(9, 'Сохранено. Номер 1234.', None)
     store.append_event(sid, 'text_displayed', 10, 'Заявка на подключение оформлена.')
     deliver(11, 'Сохранено. Номер wrong.', None)
     deliver(12, 'Сегодня внести 100 рублей: аванс 100, обязательные доплаты 0. Далее ежемесячно 700 рублей. Оформить заявку?', offer)
-    store.finish_session(sid, 'order', offer=offer, receipt={'receipt_id': 'abc', 'operation_type': 'order'})
+    store.finish_session(sid, 'order', offer=offer, receipt={'receipt_id': 'abc', 'spoken_reference': 1234, 'operation_type': 'order'})
     assert store.analyze_next() == 'complete'
     findings = {f['start_ms']: f['code'] for f in store.detail(sid)['findings'] if 'code' in f}
     assert findings == {3: 'price_mismatch', 4: 'price_match', 5: 'price_unverified',

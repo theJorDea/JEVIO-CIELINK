@@ -25,9 +25,10 @@ def database_url(request):
         pytest.skip('CIELINK_TEST_POSTGRES_URL not set')
     import psycopg
 
-    schema = Path(__file__).resolve().parents[1] / 'migrations' / '002_operations.sql'
-    with psycopg.connect(url) as conn:
-        conn.execute(schema.read_text(encoding='utf-8'))
+    migrations = Path(__file__).resolve().parents[1] / 'migrations'
+    with psycopg.connect(url, autocommit=True) as conn:
+        for name in ('002_operations.sql', '003_spoken_reference.sql'):
+            conn.execute((migrations / name).read_text(encoding='utf-8'))
     yield url
 
 
@@ -48,6 +49,8 @@ def test_durable_snapshot_and_stable_receipt(database_url, payload, kind):
     assert receipt.confirmed_terms['offer']['price'] == 399
     reopened = OperationStore(database_url)
     assert reopened.lookup_operation(receipt.operation_key) == receipt
+    assert 1 <= receipt.spoken_reference <= 99999999
+    assert reopened.lookup_reference(receipt.spoken_reference) == receipt
     payload['confirmed_terms'] = {'offer': {'price': 399, 'revision': 2}, 'house_id': 'test'}
     assert reopened.record_operation(**payload) == receipt
 
@@ -116,6 +119,20 @@ def test_session_order_and_scope(database_url, payload):
         with pytest.raises(OperationConflictError):
             attempt(**(other | {'operation_key': receipts[0].operation_key}))
     assert store.record_operation(**other).sequence_no == 1
+
+
+def test_reference_is_global_under_concurrent_writes(database_url, payload):
+    store = OperationStore(database_url)
+    barrier = Barrier(8)
+
+    def submit(index):
+        barrier.wait(timeout=10)
+        return store.record_operation(**(payload | {'operation_key': str(uuid4()), 'session_id': str(uuid4())}))
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        receipts = list(executor.map(submit, range(8)))
+    assert len({r.spoken_reference for r in receipts}) == 8
+    assert all(r.sequence_no == 1 and store.lookup_reference(r.spoken_reference) == r for r in receipts)
 
 
 @pytest.mark.parametrize('change', [{'operation_type': 'unknown'}, {'operation_key': ' '},

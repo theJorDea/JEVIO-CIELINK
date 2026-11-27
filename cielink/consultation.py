@@ -18,6 +18,7 @@ class Consultation:
         self.coverage_status = None
         self.reads = SpeculationCoordinator(self.coverage, quotes, mode=mode)
         self.prepared = None
+        self.proposed_action = None
 
     @staticmethod
     def _parse(state: SessionState, text: str):
@@ -25,9 +26,10 @@ class Consultation:
         # Keep domain values separate from speech revisions; never erase budget on an address correction.
         parts = re.split(r'[,;]|\s+и\s+', phrase)
         address_parts = []
-        changed_budget = False
+        has_budget = False
         for part in parts:
             part = part.strip()
+            part = re.sub(r'\bдо двух тысяч\b', 'до 2000', part)
             budget = re.fullmatch(r'(?:(сегодня|сейчас|при подключении|ежемесячно)\s+)?(?:бюджет\s+)?до\s+(\d+)\s*(?:₽|рублей|рубля|руб)?\s*(после скидки|после акции|в месяц|сегодня)?', part)
             if budget:
                 field = 'budget_today' if (budget[1] in ('сегодня', 'сейчас', 'при подключении') or budget[3] == 'сегодня') else 'monthly_budget'
@@ -35,12 +37,12 @@ class Consultation:
                 if getattr(state, field) != value:
                     setattr(state, field, value)
                     state.revisions[field] = state.revisions.get(field, 0) + 1
-                    changed_budget = True
+                has_budget = True
             elif part in ('нет', 'ой', 'стоп'):
                 continue
             elif part:
                 address_parts.append(part)
-        return ' '.join(address_parts), changed_budget
+        return ' '.join(address_parts), has_budget
 
     async def _resolve(self, phrase):
         phrase = re.sub(r'^(?:нет|стоп|ой)\s+', '', phrase)
@@ -62,10 +64,48 @@ class Consultation:
         self.reads.partial(self._request(draft, address) if address else None)
 
     async def respond(self, state: SessionState, text: str) -> str:
-        phrase, changed_budget = self._parse(state, text)
+        phrase, has_budget = self._parse(state, text)
         prepared, self.prepared = self.prepared, None
+        self.proposed_action = None  # Only an actual invitation on this turn is confirmable.
+        if phrase in {'второй', 'нет второй'} and self.base:
+            state.pending_clarification = 'corpus_2'
+            state.active_offer = None
+            self.reads.invalidate()
+            return f'Вы имеете в виду корпус два по адресу {self.base}?'
+        if state.pending_clarification and text.strip(' .!?').casefold() == 'нет':
+            state.pending_clarification = 'building_component'
+            return 'Тогда уточните обозначение дома: корпус, строение или дробь и номер.'
+        if state.pending_clarification == 'corpus_2' and phrase == 'да':
+            phrase = 'корпус два'
+        if re.search(r'\b(?:нет (?:своего |собственного )?роутера|роутера (?:у меня )?нет)\b', phrase):
+            if 'роутер' not in state.needs:
+                state.needs.append('роутер')
+                state.revisions['needs'] = state.revisions.get('needs', 0) + 1
+            state.active_offer = None
+            self.reads.invalidate()
+            return 'Для этого предложения нужен собственный роутер. Условия предоставления роутера не подтверждены, заявку не оформляю.'
+        if (re.search(r'\bпосле (?:акции|скидки)\b', phrase)
+                or re.fullmatch(r'(?:а )?сколько (?:будет )?потом', phrase)):
+            if self.coverage_status == 'unknown' and state.address and not state.pending_clarification:
+                self.proposed_action = 'coverage_request'
+                return f'{self.describe(state.address)}: цена не подтверждена. Отправить запрос на проверку дома?'
+            offer = state.active_offer
+            if not offer or not state.address or offer.house_id != state.address.house_id:
+                return 'Для этого дома подтверждённой цены нет.'
+            price = offer.periods[-1].monthly_price
+            if len(offer.periods) == 1:
+                return f'У этого тарифа нет акции: ежемесячная цена {price} рублей.'
+            return f'После акции цена {price} рублей в месяц.'
+        if state.pending_clarification and not phrase:
+            return 'Уточните корпус, строение или дробь и номер.'
         if phrase:
             result = prepared[2] if prepared and prepared[:2] == (phrase, self.base) else await self._resolve(phrase)
+            if result.status == 'not_found' and not re.search(
+                r'^(?:(?:нет|ой|стоп)\s+)?(?:\d|восемнадцать|учебн|на учебной|улица\b|'
+                r'дом\b|корпус\b|строение\b|литера\b|дробь\b)|\bдом\s+\d+', phrase
+            ):
+                return 'Уточните, пожалуйста, что вы хотите изменить или узнать.'
+            state.pending_clarification = None
             if result.status != 'resolved':
                 self.reads.invalidate()
             state.active_offer = None
@@ -82,8 +122,9 @@ class Consultation:
                 return 'Не удалось определить адрес. Назовите улицу, дом и корпус.'
             state.address = result.address
             self.base = f'{result.address.street} {result.address.house}'
-        elif not changed_budget and not state.address:
-            return 'По какому адресу нужно подключение?'
+        elif not has_budget:
+            return ('Уточните, пожалуйста, что вы хотите изменить или узнать.' if state.address
+                    else 'По какому адресу нужно подключение?')
         if not state.address:
             return 'Бюджет учтён. Назовите адрес подключения.'
         address = state.address
@@ -91,10 +132,12 @@ class Consultation:
         self.coverage_status = coverage.status
         description = self.describe(address)
         if self.coverage_status == 'unknown':
+            self.proposed_action = 'coverage_request'
             return f'{description}: данных о покрытии нет. Отправить запрос на проверку дома?'
         if self.coverage_status == 'unavailable':
             return f'{description}: по учебным данным подключения нет. Заявку не создаю.'
         if self.coverage_status == 'error':
+            self.proposed_action = 'handoff'
             return f'{description}: проверка сейчас недоступна. Передать вопрос специалисту?'
         assert options is not None  # available coverage always joins the matching quote
         if isinstance(options, NoOffer):
@@ -102,6 +145,7 @@ class Consultation:
             return options.reason
         offer = options.offers[0]
         state.active_offer = offer
+        self.proposed_action = 'order'
         name = self.quotes.offers[offer.offer_id]['name']
         fees = sum(offer.mandatory_charges.values())
         prices = '; затем '.join(f'ежемесячно {p.monthly_price} рублей' +

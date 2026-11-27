@@ -32,10 +32,13 @@ def test_interrupted_terms_cannot_be_accepted_and_ack_is_not_consent(case):
     d.delivered()
     assert say('да, я слышу') == terms and store.lookup_operation(key) is None
     d.delivered()
-    answer = say('да, подключайте')
+    assert say('да') == terms and store.lookup_operation(key) is None
+    assert say('да, оформляйте') == terms and store.lookup_operation(key) is None
+    d.delivered()
+    answer = say('да, оформляйте')
     receipt = store.lookup_operation(key)
-    assert receipt.operation_type == 'order' and receipt.receipt_id in answer
-    assert receipt.receipt_id in say('да, подключайте')
+    assert receipt.operation_type == 'order' and answer == f'Сохранено. Номер {receipt.spoken_reference}.'
+    assert say('да, подключайте') == f'Операция уже сохранена. Номер {receipt.spoken_reference}.'
 
 
 def test_correction_with_old_consent_can_only_create_new_check(case):
@@ -43,7 +46,7 @@ def test_correction_with_old_consent_can_only_create_new_check(case):
     say('Учебная 18 корпус один'); key = d.proposal.key; d.delivered()
     consent = say('стоп, корпус второй')
     d.delivered()
-    assert say('да подключайте') == consent and store.lookup_operation(key) is None
+    assert say('да оформляйте') == consent and store.lookup_operation(key) is None
     d.delivered(); say('да проверьте адрес')
     assert d.receipt.operation_type == 'coverage_request'
     assert d.receipt.confirmed_terms['address']['corpus'] == '2'
@@ -68,6 +71,9 @@ def test_deferral_after_price_retires_offer(case):
 
 def test_explicit_handoff_or_refusal(case):
     d, say, store = case
-    say('хочу оператора'); key = d.proposal.key; d.delivered()
+    prompt = say('хочу оператора'); key = d.proposal.key; d.delivered()
+    assert say('да') == prompt and store.lookup_operation(key) is None
+    d.delivered()
+    assert say('да оформляйте') == prompt and store.lookup_operation(key) is None
     say('не надо'); say('да')
     assert d.finished and store.lookup_operation(key) is None

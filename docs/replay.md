@@ -9,6 +9,10 @@ uv run --offline --locked python -m pytest -q tests/test_replay.py
 
 Alternatively use the existing virtual environment's Python. Omit `--output` for JSON on stdout. Exit 0 means every case passed in every mode; otherwise inspect `results[mode][].failures`. Run as a standalone process: it temporarily sets training configuration. For each mode the runner starts Uvicorn on a free IPv4 loopback port, opens a real `/ws/voice` connection per case, selects text input/display, and deletes both temporary SQLite databases after shutdown. No microphone, remote provider, persistent CRM, credentials or running service required.
 
+## Один разговор и его карточка для защиты
+
+`uv run --locked python -m cielink.replay --demo-dir local-data/defense-01 --output local-data/defense-01/report.json` создаёт **новый**, изолированный каталог. Один клиент через WebSocket называет корпус 1, задаёт бюджет словами, спрашивает цену после акции, уточняет «нет, второй», спрашивает о цене уже для другого дома и даёт согласие на проверку. В `report.json` находятся идентификатор этой сессии, текст и результат сверки с отдельной CRM. Чтобы открыть именно её в панели, в PowerShell задайте `$env:CIELINK_REVIEW_DB='local-data/defense-01/review.db'` перед запуском FastAPI из корня и откройте дашборд по README. Каталог намеренно не переиспользуется. Это **текстовый** показ; он не создаёт звуковую дорожку и не заменяет прогон трёх участников с микрофоном.
+
 ## Acceptance oracle
 
 [The corpus](../fixtures/replay-scenarios.json) supplies the same ordered turns to all modes. `partials` precede the final; `display: false` withholds delivery evidence. `receipt: true` marks turns that must return the **committed** receipt number. The runner counts session CRM rows after every turn and compares the finished `GET /api/sessions/{id}` transcript, coverage, outcome and receipt with the fixture and persisted operation. It compares the house, offer and monthly budget rather than treating a reassuring reply as proof of a sale.
@@ -23,6 +27,10 @@ Alternatively use the existing virtual environment's Python. Omit `--output` for
 | duplicate | Repeating the confirmation in the same session returns the original number, one row. |
 | error | Fixture coverage error and consent produce a handoff, not an unavailable house or a sale. |
 | changed | A delivered K1 offer, misleading partials and a K2 correction invalidate the old order scope. Only the K2 check is saved; the 2200 monthly limit survives. |
+| followup_correction | Spoken monthly budget, post-promo price question and ambiguous «Нет, второй» preserve K1 and the budget until clarification. Clarifying «да» changes the house only. After another price question K2 yields a check, never the K1 order. |
+| no_router | A customer who has no router cannot accidentally order an offer conditioned on owning one. The reply retains the house and budget and records the equipment need. |
+
+For a turn with `context`, replay compares the actual server snapshot field-by-field before the simulated display acknowledgement. CRM rows are still checked after every turn, including questions and clarification. The final card is compared to the durable operation, not just the last generated text.
 
 ## Reading the benchmark
 
@@ -32,16 +40,16 @@ Sample `aggregate` object from one local run, not a performance target:
 
 ```json
 {
-  "sequential": {"calls":8,"passed":8,"measured_turns":21,"read_starts":15,"unused_reads":0,"local_final_to_reply_p50_ms":14.827,"local_final_to_reply_p95_ms":20.025,"acoustic_latency_ms":null,"mobile_latency_ms":null},
-  "early": {"calls":8,"passed":8,"measured_turns":21,"read_starts":15,"unused_reads":0,"local_final_to_reply_p50_ms":13.27,"local_final_to_reply_p95_ms":17.6,"acoustic_latency_ms":null,"mobile_latency_ms":null},
-  "speculative": {"calls":8,"passed":8,"measured_turns":21,"read_starts":17,"unused_reads":2,"local_final_to_reply_p50_ms":14.831,"local_final_to_reply_p95_ms":18.39,"acoustic_latency_ms":null,"mobile_latency_ms":null}
+  "sequential": {"calls":10,"passed":10,"measured_turns":32,"read_starts":21,"unused_reads":0,"local_final_to_reply_p50_ms":11.826,"local_final_to_reply_p95_ms":14.777,"acoustic_latency_ms":null,"mobile_latency_ms":null},
+  "early": {"calls":10,"passed":10,"measured_turns":32,"read_starts":21,"unused_reads":0,"local_final_to_reply_p50_ms":11.210,"local_final_to_reply_p95_ms":15.417,"acoustic_latency_ms":null,"mobile_latency_ms":null},
+  "speculative": {"calls":10,"passed":10,"measured_turns":32,"read_starts":23,"unused_reads":2,"local_final_to_reply_p50_ms":10.703,"local_final_to_reply_p95_ms":14.701,"acoustic_latency_ms":null,"mobile_latency_ms":null}
 }
 ```
 
-The modes are the web adapter's `sequential`, `early` (prepares address resolution), and `speculative` (also starts coverage/quote reads). They are not LiveKit A/B/C. The replay pins Uvicorn to asyncio on both Linux and Windows. At 21 turns per mode, nearest-rank p95 is the second-slowest observed turn. These numbers do not establish a speedup, acoustic interruption time or mobile latency.
+The modes are the web adapter's `sequential`, `early` (prepares address resolution), and `speculative` (also starts coverage/quote reads). They are not LiveKit A/B/C. The replay pins Uvicorn to asyncio on both Linux and Windows. At 32 turns per mode, nearest-rank p95 is the second-slowest observed turn. These numbers do not establish a speedup, acoustic interruption time or mobile latency.
 
 ## Business and evidence gaps
 
-- `text_displayed` acknowledges a test client event, not hearing or understanding prices. The rules accept bare “да” after delivery; whether that suffices for each operation needs a business decision.
+- `text_displayed` acknowledges a test client event, not hearing or understanding prices. Bare “да” does not place an order. After delivered order terms, use an action-specific confirmation such as «да, оформляйте». A clarification about a corpus is never CRM consent.
 - A handoff means a saved training queue record, not a connected or available specialist. The duplicate case covers repeated consent in one session, not reconnection or cross-session deduplication.
 - A fixture `error` is a returned coverage status, not a real provider timeout. Late provider completion and failure after CRM commit require separate fault-injection tests. Actual acoustics, SIP and mobile behavior need the [separate validation route](validation.md).

@@ -41,7 +41,7 @@ function extraValue(value: unknown) {
   catch { return 'Значение не удалось отобразить'; }
 }
 
-function PlaybackLog({ track, events }: { track?: Track; events: EvidenceEvent[] }) {
+function PlaybackLog({ track, events, findings }: { track?: Track; events: EvidenceEvent[]; findings: Finding[] }) {
   const audio = React.useRef<HTMLAudioElement>(null);
   const [duration, setDuration] = React.useState<number | null>(null);
   const [failed, setFailed] = React.useState(false);
@@ -55,6 +55,21 @@ function PlaybackLog({ track, events }: { track?: Track; events: EvidenceEvent[]
   const start = track?.start_ms;
   function syncDuration(el: HTMLAudioElement) {
     if (el.readyState >= 1) setDuration(el.duration);
+  }
+
+  function seekTarget(offset: unknown) {
+    const seconds = hasTime(offset) && hasTime(start) ? (offset - start) / 1000 : null;
+    const reason = !hasTime(offset) ? 'Время неизвестно' : state !== 'valid' ? status
+      : seconds === null ? 'Начало дорожки неизвестно' : duration === null || !Number.isFinite(duration) ? 'Длительность неизвестна'
+      : seconds < 0 || seconds >= duration ? 'Вне дорожки' : '';
+    function seek() {
+      if (!audio.current || seconds === null || reason) return;
+      try {
+        audio.current.currentTime = seconds;
+        setNotice(`Позиция в записи: ${time(seconds * 1000)}.`);
+      } catch { setNotice('Переход к записи недоступен.'); }
+    }
+    return { reason, seek };
   }
 
   return <>
@@ -71,19 +86,10 @@ function PlaybackLog({ track, events }: { track?: Track; events: EvidenceEvent[]
       {events.length === 0 ? <p className="evidence__empty">Событий нет.</p> : <ol>
         {events.map((event, i) => {
           const offset = event.offset_ms;
-          const seconds = hasTime(offset) && hasTime(start) ? (offset - start) / 1000 : null;
-          const reason = !hasTime(offset) ? 'Время события неизвестно' : state !== 'valid' ? status
-            : seconds === null ? 'Начало дорожки неизвестно' : duration === null || !Number.isFinite(duration) ? 'Длительность неизвестна'
-            : seconds < 0 || seconds >= duration ? 'Вне дорожки' : '';
+          const { reason, seek } = seekTarget(offset);
           const extras = Object.entries(event).filter(([k]) => !['type', 'offset_ms', 'text'].includes(k));
           return <li className="evidence__event" key={i}>
-            <button type="button" className="event-link" disabled={!!reason} title={reason || 'Перейти к событию в записи'} onClick={() => {
-              if (!audio.current || seconds === null || reason) return;
-              try {
-                audio.current.currentTime = seconds;
-                setNotice(`Позиция в записи: ${time(seconds * 1000)}.`);
-              } catch { setNotice('Переход к событию недоступен.'); }
-            }}><strong>{event.type || 'Тип не указан'}</strong>{' · '}<span className="evidence__time">{time(offset)}</span>
+            <button type="button" className="event-link" disabled={!!reason} title={reason || 'Перейти к событию в записи'} onClick={seek}><strong>{event.type || 'Тип не указан'}</strong>{' · '}<span className="evidence__time">{time(offset)}</span>
               {event.text && <span className="utterance">{event.text}</span>}
               {!reason && <span className="action-label">Перейти к записи</span>}
             </button>{reason && <small className="evidence__reason">{reason}</small>}
@@ -93,6 +99,20 @@ function PlaybackLog({ track, events }: { track?: Track; events: EvidenceEvent[]
           </li>;
         })}
       </ol>}
+    </section>
+    <section className="evidence__findings"><h3>Выводы</h3>
+      {!findings.length ? <p className="evidence__empty">Выводов нет.</p> : <ul>
+        {findings.map((finding, i) => {
+          const { reason, seek } = seekTarget(finding.start_ms);
+          return <li className="evidence__finding" key={i}>
+            <button type="button" className="event-link" disabled={!!reason} title={reason || 'Перейти к началу интервала'} onClick={seek}>
+              <span>{finding.message || 'Сообщение отсутствует.'}</span>
+              <span className="evidence__time">Начало: {time(finding.start_ms)} · Конец: {time(finding.end_ms)}</span>
+              {!reason && <span className="action-label">Перейти к записи</span>}
+            </button>{reason && <small className="evidence__reason">{reason}</small>}
+          </li>;
+        })}
+      </ul>}
     </section>
   </>;
 }
@@ -108,14 +128,6 @@ export default function Evidence({ events, tracks, findings }: Props) {
         {choices.map(({ track, key }, i) => <option key={key} value={key}>{i + 1}. {track.role || 'Роль не указана'}</option>)}
       </select>
     </label>}
-    <PlaybackLog key={`${active?.key}:${active?.track.status}`} track={active?.track} events={events ?? []} />
-    <section className="evidence__findings"><h3>Выводы</h3>
-      {!findings?.length ? <p className="evidence__empty">Выводов нет.</p> : <ul>
-        {findings.map((finding, i) => <li className="evidence__finding" key={i}>
-          <p>{finding.message || 'Сообщение отсутствует.'}</p>
-          <span className="evidence__time">Начало: {time(finding.start_ms)} · Конец: {time(finding.end_ms)}</span>
-        </li>)}
-      </ul>}
-    </section>
+    <PlaybackLog key={`${active?.key}:${active?.track.status}`} track={active?.track} events={events ?? []} findings={findings ?? []} />
   </section>;
 }

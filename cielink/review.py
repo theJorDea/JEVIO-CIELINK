@@ -143,9 +143,87 @@ class ReviewStore:
         return None
 
 
-_AMOUNT = r'(\d+(?:[.,]\d{1,2})?)'
-_RUB = r'(?:рублей|рубля|рубль|руб|₽)'
-_PRICE = re.compile(rf'(?:ежемесячно\s+{_AMOUNT}\s*{_RUB}|{_AMOUNT}\s*{_RUB}\s+в месяц)', re.I)
+_AMOUNT = r'(\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)'
+_RUB = r'(?:рублей|рубля|рубль|руб\.?|₽)'
+_MONTHLY = rf'(?:ежемесячно\s+{_AMOUNT}\s*{_RUB}|{_AMOUNT}\s*{_RUB}\s+в месяц)'
+_TODAY = rf'сегодня внести\s+{_AMOUNT}\s*{_RUB}'
+_ADVANCE = rf'аванс\s+{_AMOUNT}(?:\s*{_RUB})?'
+_FEES = rf'обязательные доплаты\s+{_AMOUNT}(?:\s*{_RUB})?'
+_DURATION = r' в течение (\d+) (?:мес\.?|месяц(?:а|ев)?)'
+
+
+def _number(value):
+    try:
+        number = Decimal(str(value).replace(',', '.'))
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def _comparison(field, spoken, expected, unit='руб.'):
+    observed = _number(''.join(spoken.split()))
+    message = f'{field}: озвучено {observed} {unit}; '
+    if expected is None:
+        return 'price_unverified', message + 'проверенное значение не установлено.'
+    code = 'price_match' if observed == expected else 'price_mismatch'
+    return code, message + f'в предложении {expected} {unit}'
+
+
+def _audit_prices(clause, offer):
+    clause = clause.rstrip('…').rstrip()
+    offer = offer if isinstance(offer, dict) else {}
+    upfront = re.fullmatch(rf'{_TODAY}(?::\s*{_ADVANCE},\s*{_FEES}|,\s*{_MONTHLY})?', clause)
+    advance = _number(offer.get('advance'))
+    charges = offer.get('mandatory_charges')
+    amounts = [_number(v) for v in charges.values()] if isinstance(charges, dict) else None
+    fees = sum(amounts) if amounts is not None and None not in amounts else None
+    if upfront:
+        total = advance + fees if advance is not None and fees is not None else None
+        yield _comparison('Сегодня внести', upfront[1], total)
+        if upfront[2]:
+            yield _comparison('Аванс', upfront[2], advance)
+            yield _comparison('Обязательные доплаты', upfront[3], fees)
+        if not (upfront[4] or upfront[5]):
+            return
+        clause = re.sub(rf'^{_TODAY},\s*', '', clause)
+    for pattern, label, expected in ((_ADVANCE, 'Аванс', advance), (_FEES, 'Обязательные доплаты', fees)):
+        if match := re.fullmatch(pattern, clause):
+            yield _comparison(label, match[1], expected)
+            return
+
+    periods = offer.get('periods')
+    periods = periods if isinstance(periods, list) and all(isinstance(p, dict) for p in periods) else []
+    clause = clause.removeprefix('далее ')
+    promo = re.fullmatch(rf'{_MONTHLY}{_DURATION}(?:;\s*затем {_MONTHLY})?', clause)
+    first = periods[0] if periods else {}
+    months = _number(first.get('months'))
+    has_promo = months is not None and months > 0 and months == months.to_integral_value()
+    after_rate = _number(periods[1].get('monthly_price')) if has_promo and len(periods) >= 2 else None
+    if promo:
+        promo_rate = _number(first.get('monthly_price')) if has_promo else None
+        yield _comparison('Цена по акции', promo[1] or promo[2], promo_rate, 'руб./мес.')
+        yield _comparison('Срок акции', promo[3], months if has_promo else None, 'мес.')
+        if promo[4] or promo[5]:
+            yield _comparison('Цена после акции', promo[4] or promo[5], after_rate, 'руб./мес.')
+    elif after := re.fullmatch(rf'(?:затем|после акции(?: цена)?) {_MONTHLY}', clause):
+        yield _comparison('Цена после акции', after[1] or after[2], after_rate, 'руб./мес.')
+    elif regular := re.fullmatch(rf'у этого тарифа нет акции: ежемесячная цена {_AMOUNT}\s*{_RUB}', clause):
+        if has_promo:
+            yield 'price_mismatch', f'Акция: озвучено «нет акции»; в предложении срок акции {months} мес.'
+        rate = _number(first.get('monthly_price')) if len(periods) == 1 and first.get('months') is None else None
+        yield _comparison('Ежемесячная цена', regular[1], rate, 'руб./мес.')
+    elif monthly := re.fullmatch(_MONTHLY, clause):
+        spoken = monthly[1] or monthly[2]
+        rates = {_number(p.get('monthly_price')) for p in periods}
+        observed = _number(''.join(spoken.split()))
+        if len(rates) > 1 and None not in rates and observed not in rates:
+            options = ', '.join(map(str, sorted(rates)))
+            yield 'price_mismatch', f'Ежемесячная цена: озвучено {observed} руб./мес.; в предложении по периодам: {options} руб./мес.'
+        else:
+            expected = rates.pop() if len(rates) == 1 else None
+            yield _comparison('Ежемесячная цена', spoken, expected, 'руб./мес.')
+
+
 _OPS = {
     'заявка на подключение оформлена': 'order', 'оформлю заявку на подключение': 'order',
     'запрос на проверку дома отправлен': 'coverage_request', 'отправлю запрос на проверку дома': 'coverage_request',
@@ -159,24 +237,7 @@ def _audit_delivery(text, offer, receipt):
     clauses = re.split(r'(?<=[.!?])\s+', text.strip().casefold())
     for clause in clauses:
         clause = clause.rstrip('.!')
-        price_clause = re.sub(r'^сегодня внести \d+(?:[.,]\d{1,2})? рублей,\s+', '', clause)
-        price = _PRICE.fullmatch(price_clause.removeprefix('далее '))
-        if price:
-            amount = Decimal((price[1] or price[2]).replace(',', '.'))
-            periods = offer.get('periods') if isinstance(offer, dict) else None
-            try:
-                rates = {Decimal(str(p['monthly_price'])) for p in periods or []}
-            except (InvalidOperation, KeyError, TypeError):
-                rates = set()
-            if not rates or not all(rate.is_finite() and rate >= 0 for rate in rates):
-                yield 'price_unverified', 'Нет проверенной цены для сравнения с озвученной суммой.'
-            elif amount not in rates:
-                expected = ', '.join(str(rate) for rate in sorted(rates))
-                yield 'price_mismatch', f'Озвучено {amount} руб./мес.; в предложении: {expected} руб./мес.'
-            elif len(rates) > 1:
-                yield 'price_unverified', 'Цена зависит от периода; озвученная сумма не определяет период.'
-            else:
-                yield 'price_match', f'Озвученная цена {amount} руб./мес. совпадает с предложением.'
+        yield from _audit_prices(clause, offer)
         operation = _OPS.get(clause)
         if operation:
             actual = receipt.get('operation_type') if isinstance(receipt, dict) else None
@@ -188,10 +249,11 @@ def _audit_delivery(text, offer, receipt):
                 yield 'operation_match', f'Квитанция подтверждает озвученную операцию {actual}.'
     saved = re.fullmatch(r'(?:сохранено|операция уже сохранена)\. номер ([\w-]+)\.?', text.strip(), flags=re.I)
     if saved:
-        actual_id = receipt.get('receipt_id') if isinstance(receipt, dict) else None
-        if not actual_id:
+        # Historical snapshots actually used the UUID as the spoken number.
+        actual_id = receipt.get('spoken_reference', receipt.get('receipt_id')) if isinstance(receipt, dict) else None
+        if not actual_id or not receipt.get('receipt_id'):
             yield 'operation_unverified', 'Сообщено о сохранении, но подтверждающая квитанция отсутствует.'
-        elif saved[1] != actual_id:
+        elif saved[1] != str(actual_id):
             yield 'receipt_mismatch', f'Озвучен номер {saved[1]}; номер квитанции: {actual_id}.'
         else:
             yield 'receipt_match', 'Озвученный номер совпадает с номером квитанции.'
@@ -200,15 +262,23 @@ def _audit_delivery(text, offer, receipt):
 def _review(events, receipt):
     findings = []
     bound = None
+    playback_start = None
     for event in events:
         kind, offset, text = event
+        if kind == 'playback_started':
+            playback_start = offset
+        elif kind in ('final', 'reply_generated', 'playback_interrupted', 'text_displayed'):
+            playback_start = None
         if kind == 'offer_verified':
             bound = (offset, json.loads(text))
             continue
         if kind in ('playback_ended', 'text_displayed') and text:
             offer = bound[1] if bound and bound[0] == offset else None
             for code, message in _audit_delivery(text, offer, receipt):
-                findings.append(dict(start_ms=offset, end_ms=offset, code=code, message=message))
+                start = playback_start if code.startswith('price_') and playback_start is not None else offset
+                findings.append(dict(start_ms=start, end_ms=offset, code=code, message=message))
+        if kind == 'playback_ended':
+            playback_start = None
         bound = None
         if kind == 'playback_interrupted':
             message = 'Воспроизведение ответа прервано; полная доставка не подтверждена.'

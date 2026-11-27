@@ -8,7 +8,7 @@ def test_replay_corpus_passes_all_web_modes():
     report = run()
     assert set(report['aggregate']) == set(MODES)
     for mode, aggregate in report['aggregate'].items():
-        assert aggregate['calls'] == 8
+        assert aggregate['calls'] == 10
         assert aggregate['passed'] == aggregate['calls']
         assert aggregate['acoustic_latency_ms'] is None
         assert aggregate['mobile_latency_ms'] is None
@@ -20,8 +20,25 @@ def test_replay_corpus_passes_all_web_modes():
 def test_fixture_names_cover_required_acceptance_edges():
     fixture = json.loads(CORPUS.read_text(encoding='utf-8'))
     assert {item['id'] for item in fixture} == {
-        'order', 'unknown', 'decline', 'think_it_over', 'ack', 'duplicate', 'error', 'changed'
+        'order', 'unknown', 'decline', 'think_it_over', 'ack', 'duplicate', 'error', 'changed',
+        'followup_correction', 'no_router'
     }
+
+
+def test_demo_retains_review_card_from_the_same_call(tmp_path, monkeypatch):
+    import sys
+    from cielink.review import ReviewStore
+
+    directory = tmp_path / 'demo'
+    output = tmp_path / 'report.json'
+    monkeypatch.setattr(sys, 'argv', ['replay', '--demo-dir', str(directory), '--output', str(output)])
+    assert replay.main() == 0
+    report = json.loads(output.read_text(encoding='utf-8'))
+    card = ReviewStore(directory / 'review.db').detail(report['call']['session_id'])
+    assert report['card'] == card
+    assert card['receipt']['operation_type'] == 'coverage_request'
+    assert card['receipt']['confirmed_terms']['address']['corpus'] == '2'
+    assert card['tracks'] == []  # text replay has no acoustic evidence
 
 
 def test_wrong_expected_house_is_reported(tmp_path, monkeypatch):

@@ -10,9 +10,9 @@ from uuid import uuid4
 
 OperationType = Literal["order", "coverage_request", "handoff"]
 _TYPES = ("order", "coverage_request", "handoff")
-_SCHEMA = Path(__file__).resolve().parents[1] / "migrations" / "002_operations.sql"
-_SELECT = """SELECT receipt_id, session_id, sequence_no, operation_type, confirmed_terms
-             FROM crm_operations WHERE operation_key = ?"""
+_MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+_SELECT = """SELECT receipt_id, operation_key, session_id, sequence_no, operation_type,
+                    confirmed_terms, spoken_reference FROM crm_operations"""
 
 
 class OperationConflictError(ValueError):
@@ -27,6 +27,12 @@ class OperationReceipt:
     sequence_no: int
     operation_type: OperationType
     confirmed_terms: dict
+    spoken_reference: int
+
+
+def _receipt(row):
+    rid, key, sid, number, kind, snapshot, reference = row
+    return OperationReceipt(rid, key, sid, number, kind, json.loads(snapshot), reference)
 
 
 def _snapshot(terms: dict) -> str:
@@ -47,7 +53,15 @@ class OperationStore:
                 raise ValueError("SQLite needs a durable file path")
             self._sqlite_path = Path(path).resolve()
             with self._connection() as conn:
-                conn.execute(_SCHEMA.read_text(encoding="utf-8"))
+                conn.execute('BEGIN IMMEDIATE')
+                conn.execute((_MIGRATIONS / '002_operations.sql').read_text(encoding='utf-8'))
+                columns = conn.execute('PRAGMA table_info(crm_operations)').fetchall()
+                if 'spoken_reference' not in {column[1] for column in columns}:
+                    # executescript would implicitly commit and release the migration lock.
+                    migration = _MIGRATIONS / 'sqlite' / '003_spoken_reference.sql'
+                    for statement in migration.read_text(encoding='utf-8').split(';'):
+                        if statement.strip():
+                            conn.execute(statement)
         elif database_url.startswith(("postgresql://", "postgres://")):
             self._sqlite_path = None
         else:
@@ -69,11 +83,14 @@ class OperationStore:
 
     def lookup_operation(self, operation_key: str) -> OperationReceipt | None:
         with self._connection() as conn:
-            row = conn.execute(self._sql(_SELECT), (operation_key,)).fetchone()
-        if row is None:
-            return None
-        receipt_id, session_id, number, kind, snapshot = row
-        return OperationReceipt(receipt_id, operation_key, session_id, number, kind, json.loads(snapshot))
+            row = conn.execute(self._sql(_SELECT + ' WHERE operation_key = ?'), (operation_key,)).fetchone()
+        return _receipt(row) if row else None
+
+    def lookup_reference(self, spoken_reference: int) -> OperationReceipt | None:
+        """Resolve the customer's spoken number without knowing their session."""
+        with self._connection() as conn:
+            row = conn.execute(self._sql(_SELECT + ' WHERE spoken_reference = ?'), (spoken_reference,)).fetchone()
+        return _receipt(row) if row else None
 
     def record_operation(self, *, session_id: str, operation_key: str, operation_type: OperationType,
                          confirmed_terms: dict) -> OperationReceipt:
@@ -89,19 +106,23 @@ class OperationStore:
                 conn.execute('BEGIN IMMEDIATE')
             else:
                 conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', (session_id,))
-            conn.execute(self._sql("""
-                INSERT INTO crm_operations (operation_key, operation_type, confirmed_terms,
-                                            receipt_id, session_id, sequence_no)
-                SELECT ?, ?, ?, ?, ?, COALESCE(MAX(sequence_no), 0) + 1
-                FROM crm_operations WHERE session_id = ?
-                ON CONFLICT (operation_key) DO NOTHING
-            """), (operation_key, operation_type, snapshot, str(uuid4()), session_id, session_id))
-            receipt_id, stored_session, number, stored_type, stored_snapshot = conn.execute(
-                self._sql(_SELECT), (operation_key,)
-            ).fetchone()
-            if (stored_session, stored_type, stored_snapshot) != (session_id, operation_type, snapshot):
+            lookup = self._sql(_SELECT + ' WHERE operation_key = ?')
+            row = conn.execute(lookup, (operation_key,)).fetchone()
+            if not row:
+                conn.execute(self._sql("""
+                    INSERT INTO crm_operations (operation_key, operation_type, confirmed_terms,
+                                                receipt_id, session_id, sequence_no)
+                    SELECT ?, ?, ?, ?, ?, COALESCE(MAX(sequence_no), 0) + 1
+                    FROM crm_operations WHERE session_id = ?
+                    ON CONFLICT (operation_key) DO NOTHING
+                """), (operation_key, operation_type, snapshot, str(uuid4()), session_id, session_id))
+                row = conn.execute(lookup, (operation_key,)).fetchone()
+            receipt = _receipt(row)
+            if (receipt.session_id, receipt.operation_type, _snapshot(receipt.confirmed_terms)) != (
+                session_id, operation_type, snapshot
+            ):
                 raise OperationConflictError("operation_key already used for a different payload")
-        return OperationReceipt(receipt_id, operation_key, session_id, number, stored_type, json.loads(stored_snapshot))
+        return receipt
 
     def recover_operation(self, *, session_id: str, operation_key: str, operation_type: OperationType,
                           confirmed_terms: dict) -> OperationReceipt:

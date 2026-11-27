@@ -88,7 +88,11 @@ def play(host, client, crm, mode, case):
             check(generated['type'] == 'reply_generated' and generated['reply_id'] == reply['reply_id'], 'wrong generated reply')
             trace = generated['reads']  # cumulative server trace, not a per-turn delta
             if 'contains' in turn:
-                check(turn['contains'] in reply['text'], 'expected proposal missing')
+                check(turn['contains'].casefold() in reply['text'].casefold(), f'after {turn["text"]}: expected {turn["contains"]!r} in reply')
+            actual = generated.get('context', {})
+            for field, value in turn.get('context', {}).items():
+                check(field in actual and actual[field] == value,
+                      f'after {turn["text"]}: expected {field}={value!r}, observed {actual.get(field)!r}')
             if turn.get('display', True):
                 send('text_displayed', reply_id=reply['reply_id'])
             if turn.get('receipt'):
@@ -106,15 +110,18 @@ def play(host, client, crm, mode, case):
     check(card['outcome'] == case['outcome'], f'review outcome: {card["outcome"]}')
     check(card['coverage_status'] == case['coverage'], f'coverage: {card["coverage_status"]}')
     check([e['text'] for e in card['events'] if e['type'] == 'final'] == [t['text'] for t in case['turns']], 'review transcript differs')
-    rows = crm.execute('SELECT receipt_id, operation_type, confirmed_terms FROM crm_operations WHERE session_id=?', (sid,)).fetchall()
+    rows = crm.execute('SELECT receipt_id, spoken_reference, operation_type, confirmed_terms FROM crm_operations WHERE session_id=?', (sid,)).fetchall()
     if case.get('house'):
         check(len(rows) == 1, 'expected exactly one durable operation')
         if len(rows) == 1:
-            rid, kind, snapshot = rows[0]
+            rid, reference, kind, snapshot = rows[0]
             terms = json.loads(snapshot)
             receipt = card['receipt'] or {}
             check(kind == case['outcome'] and receipt.get('operation_type') == kind, 'operation type differs')
-            check(receipt.get('receipt_id') == rid and receipt_texts and all(rid in t for t in receipt_texts), 'receipt number differs')
+            check(receipt.get('receipt_id') == rid and receipt.get('spoken_reference') == reference,
+                  'review/CRM receipt identifiers differ')
+            check(receipt_texts and all(t.endswith(f'Номер {reference}.') and rid not in t for t in receipt_texts),
+                  'spoken receipt number differs')
             check(receipt.get('confirmed_terms') == terms, 'review/CRM terms differ')
             check((terms['address'] or {}).get('house_id') == case['house'], 'wrong confirmed house')
             check((terms['offer'] or {}).get('offer_id') == case.get('offer'), 'wrong confirmed offer')
@@ -133,7 +140,7 @@ def play(host, client, crm, mode, case):
     counts = Counter(e['event'] for e in trace)
     if case['id'] == 'order':
         check(bool(counts['stable']) == (mode == 'speculative'), 'unexpected stable partial trace')
-    return {'scenario': case['id'], 'failures': failures, 'local_final_to_reply_ms': times,
+    return {'session_id': sid, 'scenario': case['id'], 'failures': failures, 'local_final_to_reply_ms': times,
             'local_server_read_ms': read_ms, 'unused_reads': len(starts.keys() - used),
             'read_events': dict(counts), 'crm_rows': len(rows)}
 
@@ -166,13 +173,30 @@ def run():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, help='write UTF-8 JSON to this path instead of stdout')
+    parser.add_argument('--demo-dir', type=Path, help='create a new directory with one followup_correction call and its review/CRM databases')
     args = parser.parse_args()
-    report = run()
+    if args.demo_dir:
+        directory = args.demo_dir.resolve()
+        if directory.exists():
+            parser.error('--demo-dir requires a new directory, to avoid mixing demo and existing calls')
+        directory.mkdir(parents=True)
+        case = next(c for c in json.loads(CORPUS.read_text(encoding='utf-8')) if c['id'] == 'followup_correction')
+        with server('speculative', directory) as host, httpx.Client(base_url=f'http://{host}', trust_env=False) as client, closing(sqlite3.connect(directory / 'crm.db')) as crm:
+            call = play(host, client, crm, 'speculative', case)
+        from .review import ReviewStore
+        review = ReviewStore(directory / 'review.db')
+        review.analyze_next()
+        report = {'channel': 'web-text-loopback', 'review_db': str(directory / 'review.db'),
+                  'call': call, 'card': review.detail(call['session_id'])}
+    else:
+        report = run()
     output = json.dumps(report, indent=2, ensure_ascii=True)
     if args.output:
         args.output.write_text(output + '\n', encoding='utf-8')
     else:
         print(output)
+    if args.demo_dir:
+        return int(bool(report['call']['failures']))
     return int(any(m['passed'] != m['calls'] for m in report['aggregate'].values()))
 
 

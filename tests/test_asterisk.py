@@ -29,7 +29,8 @@ class Speech:
 
 @pytest.mark.parametrize('texts,replies,error,route,outcome,count', [
     ([ADDRESS, 'да подключайте'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'DONE', 'order', 1),
-    (['хочу оператора', 'да'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'OPERATOR', 'handoff', 1),
+    (['хочу оператора', 'да передайте специалисту'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'OPERATOR', 'handoff', 1),
+    ([ADDRESS, 'да', 'нет'], [PLAY, REC, UP, PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'DONE', 'no_action', 0),
     ([ADDRESS, 'нет'], [PLAY, REC, UP, PLAY, REC, UP, PLAY], None, 'DONE', 'no_action', 0),
     ([ADDRESS], [PLAY, REC, UP, '200 result=-1 endpos=13', '511 Command Not Permitted on a dead channel'], a.Hangup, None, 'disconnected', 0),
     ([ADDRESS], [PLAY, REC, UP, '200 result=-1 endpos=0', UP], RuntimeError, None, 'engine_failure', 0),
@@ -62,7 +63,7 @@ def test_agi_call(tmp_path, texts, replies, error, route, outcome, count):
         assert conn.execute('SELECT count(*) FROM crm_operations').fetchone() == (count,)
     if count:
         assert detail['receipt']['confirmed_terms']['prompt'] == completed[-2]
-        assert detail['receipt']['receipt_id'] in completed[-1]
+        assert completed[-1] == f"Сохранено. Номер {detail['receipt']['spoken_reference']}."
 
 
 @pytest.mark.parametrize('enhanced,expected', [('1.0', [(3, False)]), ('0.0', [])])
@@ -178,7 +179,7 @@ def test_interrupted_offer_requires_fresh_confirmation(tmp_path, monkeypatch):
     assert sum(e['type'] == 'playback_interrupted' for e in detail['events']) == 1
     assert detail['receipt']['confirmed_terms']['prompt'] == replay[1]
     assert receipt[0] == 'play'
-    assert detail['receipt']['receipt_id'] in receipt[1]
+    assert receipt[1] == f"Сохранено. Номер {detail['receipt']['spoken_reference']}."
     with sqlite3.connect(tmp_path / 'crm.db') as db:
         assert db.execute('SELECT count(*) FROM crm_operations').fetchone() == (1,)
 

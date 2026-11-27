@@ -1,5 +1,6 @@
 """Local browser bridge. No external model or synthetic CRM side effects."""
 import asyncio
+from copy import copy
 import json
 from .consent import ConfirmedDialogue
 from .crm import OperationStore
@@ -54,6 +55,16 @@ def voice_script():
     return FileResponse(STATIC / 'voice.js', media_type='text/javascript')
 
 
+class _VoiceConsultation(Consultation):
+    # The consent layer can write CRM or consult, never both in one turn. Mark
+    # the latter at the boundary rather than duplicating its phrase classifier.
+    read_only = False
+
+    async def respond(self, state, text):
+        self.read_only = True
+        return await super().respond(state, text)
+
+
 @router.websocket('/ws/voice')
 async def voice_socket(ws: WebSocket):
     # Browsers must not connect to the local training service from another site.
@@ -73,7 +84,7 @@ async def voice_socket(ws: WebSocket):
         Path('local-data').mkdir(exist_ok=True)
         dsn = 'sqlite:///local-data/crm.sqlite3'
     store = await asyncio.to_thread(OperationStore, dsn)
-    rules = Consultation(FixtureQuoteAdapter(), config.mode)
+    rules = _VoiceConsultation(FixtureQuoteAdapter(), config.mode)
     consultation = ConfirmedDialogue(rules, store)
     active_reply = None
     started = False
@@ -82,9 +93,47 @@ async def voice_socket(ws: WebSocket):
     async def record(kind, offset, text=None):
         await asyncio.to_thread(review.append_event, sid, kind, offset, text)
     seq = 0
+    incoming = asyncio.create_task(ws.receive_text())
+    pending = None
+    retired = set()
+
+    def forget(task):
+        retired.discard(task)
+        if not task.cancelled():
+            task.exception()  # detached, superseded work must never publish
+
+    async def publish():
+        nonlocal pending, active_reply, started, spoken_offer, spoken_text, seq
+        text = pending.result()
+        pending = None
+        active_reply, started = uuid4().hex, False
+        spoken_text = text
+        spoken_offer = state.active_offer.model_dump(mode='json') if state.active_offer else None
+        # No disk I/O between the actor's freshness check and the first send.
+        seq += 1
+        await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
+                            'session_id': sid, 'reply_id': active_reply, 'offset_ms': reply_offset,
+                            'text': text, 'reads': list(rules.reads.trace), 'context': {
+                                'house_id': state.address.house_id if state.address else None,
+                                'monthly_budget': str(state.monthly_budget) if state.monthly_budget is not None else None,
+                                'needs': list(state.needs)}}})
+        await ws.send_json({'type': 'reply', 'text': text, 'reply_id': active_reply,
+                            'input_offset_ms': reply_offset})
+        with CancelScope(shield=True):
+            await record('reply_generated', reply_offset, text)
+
     try:
         while True:
-            raw = await ws.receive_text()
+            if pending is not None:
+                await asyncio.wait((incoming, pending), return_when=asyncio.FIRST_COMPLETED)
+                # Input wins ties against read-only work. A CRM transaction, on
+                # the other hand, owns its whole turn through receipt publication.
+                if not incoming.done() or not rules.read_only:
+                    await asyncio.shield(pending)
+                    await publish()
+                    continue
+            raw = await incoming
+            incoming = asyncio.create_task(ws.receive_text())
             try:
                 if len(raw) > 8192:
                     raise ValueError('message too long')
@@ -110,6 +159,21 @@ async def voice_socket(ws: WebSocket):
             except (ValidationError, ValueError):
                 await ws.send_json({'type': 'error', 'message': 'Некорректное событие или время реплики.'})
                 continue
+            active_reply, started = None, False  # reject callbacks immediately on barge-in
+            if pending is not None:
+                # Keep parsed address/base/budgets, not unpublished products of
+                # the obsolete turn. Detach all mutable turn state before cancel.
+                result.state = result.state.model_copy(deep=True)
+                result.state.active_offer = None
+                rules = copy(rules)
+                rules.coverage_status = rules.prepared = rules.proposed_action = None
+                rules.reads.invalidate()
+                consultation = ConfirmedDialogue(rules, store)
+                spoken_offer = None
+                retired.add(pending)
+                pending.add_done_callback(forget)
+                pending.cancel()
+                pending = None
             await record(inp.type, inp.offset_ms, inp.text)
             state = result.state
             seq += 1
@@ -117,23 +181,21 @@ async def voice_socket(ws: WebSocket):
             if isinstance(inp, PartialInput) and not consultation.finished and not consultation.receipt:
                 await rules.partial(state, inp.text)
             if isinstance(inp, FinalInput):
-                active_reply, started = uuid4().hex, False
-                text = await consultation.respond(state, inp.text)
-                spoken_text = text
-                spoken_offer = state.active_offer.model_dump(mode='json') if state.active_offer else None
-                await record('reply_generated', inp.offset_ms, text)
-                seq += 1
-                await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
-                                    'session_id': sid, 'reply_id': active_reply, 'offset_ms': inp.offset_ms, 'text': text,
-                                    'reads': list(rules.reads.trace)}})
-                await ws.send_json({'type': 'reply', 'text': text, 'reply_id': active_reply,
-                                    'input_offset_ms': inp.offset_ms})
+                reply_offset = inp.offset_ms
+                rules.read_only = False
+                pending = asyncio.create_task(consultation.respond(state, inp.text))
     except WebSocketDisconnect:
         return
     finally:
         # The ASGI host may cancel the socket scope immediately on disconnect.
         # Persist the terminal state before draining cancellable speculative reads.
         with CancelScope(shield=True):
+            incoming.cancel()
+            await asyncio.gather(incoming, return_exceptions=True)
+            if pending is not None:
+                if rules.read_only:
+                    pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
             receipt = asdict(consultation.receipt) if consultation.receipt else None
             outcome = receipt['operation_type'] if receipt else ('no_action' if consultation.finished else 'disconnected')
             await asyncio.to_thread(review.finish_session, sid, outcome, receipt=receipt,
