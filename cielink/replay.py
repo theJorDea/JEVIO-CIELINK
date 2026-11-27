@@ -31,7 +31,7 @@ def server(mode, directory):
     with patch.dict(os.environ, env), socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
-        app = uvicorn.Server(uvicorn.Config('cielink.api:app', log_level='error', ws='websockets-sansio'))
+        app = uvicorn.Server(uvicorn.Config('cielink.api:app', loop='asyncio', log_level='error', ws='websockets-sansio'))
         thread = Thread(target=app.run, kwargs={'sockets': [sock]}, daemon=True)
         thread.start()
         try:

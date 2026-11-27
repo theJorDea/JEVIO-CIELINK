@@ -1,6 +1,6 @@
 # Offline web acceptance replay (#15)
 
-From the repository root, with the locked development dependencies already installed:
+From the repository root on Linux, use a native Python environment (do not reuse a Windows `.venv`). With `uv` and a supported Python installed, prepare the dependencies once with `uv sync --locked --group dev` while online, or add `--offline` if the Linux wheels are already cached. This replay uses only `uv.lock`: Node, npm, Vite, and the dashboard lockfile are not involved. Then run offline:
 
 ```sh
 uv run --offline --locked python -m cielink.replay --output replay.json
@@ -18,6 +18,7 @@ Alternatively use the existing virtual environment's Python. Omit `--output` for
 | order | Stable partials resolve to K1; delivered offer and consent produce one K1 order. |
 | unknown | K2 produces one coverage request, not an order. |
 | decline | Explicit refusal after the offer ends without a write. |
+| think_it_over | After a delivered K1 offer, «я подумаю» closes the call as `no_action`; even a later «да подключайте» cannot revive the proposal. No CRM row or receipt. |
 | ack | Explicit words before delivery, then “угу” after delivery, never write. Hanging up leaves `disconnected`, not an explicit refusal. |
 | duplicate | Repeating the confirmation in the same session returns the original number, one row. |
 | error | Fixture coverage error and consent produce a handoff, not an unavailable house or a sale. |
@@ -31,13 +32,13 @@ Sample `aggregate` object from one local run, not a performance target:
 
 ```json
 {
-  "sequential": {"calls":7,"passed":7,"measured_turns":18,"read_starts":13,"unused_reads":0,"local_final_to_reply_p50_ms":14.274,"local_final_to_reply_p95_ms":18.473,"acoustic_latency_ms":null,"mobile_latency_ms":null},
-  "early": {"calls":7,"passed":7,"measured_turns":18,"read_starts":13,"unused_reads":0,"local_final_to_reply_p50_ms":14.999,"local_final_to_reply_p95_ms":18.501,"acoustic_latency_ms":null,"mobile_latency_ms":null},
-  "speculative": {"calls":7,"passed":7,"measured_turns":18,"read_starts":15,"unused_reads":2,"local_final_to_reply_p50_ms":13.527,"local_final_to_reply_p95_ms":18.379,"acoustic_latency_ms":null,"mobile_latency_ms":null}
+  "sequential": {"calls":8,"passed":8,"measured_turns":21,"read_starts":15,"unused_reads":0,"local_final_to_reply_p50_ms":14.827,"local_final_to_reply_p95_ms":20.025,"acoustic_latency_ms":null,"mobile_latency_ms":null},
+  "early": {"calls":8,"passed":8,"measured_turns":21,"read_starts":15,"unused_reads":0,"local_final_to_reply_p50_ms":13.27,"local_final_to_reply_p95_ms":17.6,"acoustic_latency_ms":null,"mobile_latency_ms":null},
+  "speculative": {"calls":8,"passed":8,"measured_turns":21,"read_starts":17,"unused_reads":2,"local_final_to_reply_p50_ms":14.831,"local_final_to_reply_p95_ms":18.39,"acoustic_latency_ms":null,"mobile_latency_ms":null}
 }
 ```
 
-The modes are the web adapter's `sequential`, `early` (prepares address resolution), and `speculative` (also starts coverage/quote reads). They are not LiveKit A/B/C. At 18 turns, nearest-rank p95 is the slowest observed turn. These numbers do not establish a speedup, acoustic interruption time or mobile latency.
+The modes are the web adapter's `sequential`, `early` (prepares address resolution), and `speculative` (also starts coverage/quote reads). They are not LiveKit A/B/C. The replay pins Uvicorn to asyncio on both Linux and Windows. At 21 turns per mode, nearest-rank p95 is the second-slowest observed turn. These numbers do not establish a speedup, acoustic interruption time or mobile latency.
 
 ## Business and evidence gaps
 

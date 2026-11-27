@@ -8,7 +8,7 @@ def test_replay_corpus_passes_all_web_modes():
     report = run()
     assert set(report['aggregate']) == set(MODES)
     for mode, aggregate in report['aggregate'].items():
-        assert aggregate['calls'] == 7
+        assert aggregate['calls'] == 8
         assert aggregate['passed'] == aggregate['calls']
         assert aggregate['acoustic_latency_ms'] is None
         assert aggregate['mobile_latency_ms'] is None
@@ -20,7 +20,7 @@ def test_replay_corpus_passes_all_web_modes():
 def test_fixture_names_cover_required_acceptance_edges():
     fixture = json.loads(CORPUS.read_text(encoding='utf-8'))
     assert {item['id'] for item in fixture} == {
-        'order', 'unknown', 'decline', 'ack', 'duplicate', 'error', 'changed'
+        'order', 'unknown', 'decline', 'think_it_over', 'ack', 'duplicate', 'error', 'changed'
     }
 
 
