@@ -24,11 +24,12 @@ class VoiceConfig(Contract):
     stt: Literal['browser', 'text']
     tts: Literal['browser', 'text']
     llm: Literal['rules']
+    mode: Literal['sequential', 'early', 'speculative']
 
     @classmethod
     def load(cls):
         return cls(stt=os.getenv('CIELINK_STT', 'browser'), tts=os.getenv('CIELINK_TTS', 'browser'),
-                   llm=os.getenv('CIELINK_LLM', 'rules'))
+                   llm=os.getenv('CIELINK_LLM', 'rules'), mode=os.getenv('CIELINK_READ_MODE', 'speculative'))
 
 
 class Playback(Contract):
@@ -67,7 +68,8 @@ async def voice_socket(ws: WebSocket):
         Path('local-data').mkdir(exist_ok=True)
         dsn = 'sqlite:///local-data/crm.sqlite3'
     store = await asyncio.to_thread(OperationStore, dsn)
-    consultation = ConfirmedDialogue(Consultation(FixtureQuoteAdapter()), store)
+    rules = Consultation(FixtureQuoteAdapter(), config.mode)
+    consultation = ConfirmedDialogue(rules, store)
     active_reply = None
     started = False
     seq = 0
@@ -100,12 +102,17 @@ async def voice_socket(ws: WebSocket):
             state = result.state
             seq += 1
             await ws.send_json({'type': 'event', 'event': {**result.event.model_dump(), 'sequence': seq}})
+            if isinstance(inp, PartialInput) and not consultation.finished and not consultation.receipt:
+                await rules.partial(state, inp.text)
             if isinstance(inp, FinalInput):
                 active_reply, started = uuid4().hex, False
                 text = await consultation.respond(state, inp.text)
                 seq += 1
                 await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
-                                    'session_id': sid, 'reply_id': active_reply, 'offset_ms': inp.offset_ms, 'text': text}})
+                                    'session_id': sid, 'reply_id': active_reply, 'offset_ms': inp.offset_ms, 'text': text,
+                                    'reads': list(rules.reads.trace)}})
                 await ws.send_json({'type': 'reply', 'text': text, 'reply_id': active_reply})
     except WebSocketDisconnect:
         return
+    finally:
+        await rules.reads.close()

@@ -6,17 +6,21 @@ from decimal import Decimal
 from .addresses import FixtureAddressAdapter, FixtureCoverageAdapter
 from .domain import Address, NoOffer, QuoteRequest, SessionState
 from .quotes import FixtureQuoteAdapter
+from .speculation import Mode, SpeculationCoordinator
 
 
 class Consultation:
-    def __init__(self, quotes: FixtureQuoteAdapter):
+    def __init__(self, quotes: FixtureQuoteAdapter, mode: Mode = 'sequential'):
         self.addresses = FixtureAddressAdapter()
         self.coverage = FixtureCoverageAdapter()
         self.quotes = quotes
         self.base = ''
         self.coverage_status = None
+        self.reads = SpeculationCoordinator(self.coverage, quotes, mode=mode)
+        self.prepared = None
 
-    async def respond(self, state: SessionState, text: str) -> str:
+    @staticmethod
+    def _parse(state: SessionState, text: str):
         phrase = text.strip(' .!?').casefold()
         # Keep domain values separate from speech revisions; never erase budget on an address correction.
         parts = re.split(r'[,;]|\s+и\s+', phrase)
@@ -36,12 +40,34 @@ class Consultation:
                 continue
             elif part:
                 address_parts.append(part)
-        phrase = ' '.join(address_parts)
+        return ' '.join(address_parts), changed_budget
+
+    async def _resolve(self, phrase):
+        phrase = re.sub(r'^(?:нет|стоп|ой)\s+', '', phrase)
+        if re.match(r'^(?:корпус|литера|строение|дробь)\b', phrase) and self.base:
+            phrase = f'{self.base} {phrase}'
+        return await self.addresses.resolve_address(phrase)
+
+    def _request(self, state, address):
+        return QuoteRequest(house_id=address.house_id, on_date=state.on_date or date.fromisoformat(self.quotes.version), catalog_version=self.quotes.version, budget_today=state.budget_today, monthly_budget=state.monthly_budget, needs=state.needs)
+
+    async def partial(self, state, text):
+        if self.reads.mode == 'sequential':
+            return
+        draft = state.model_copy(deep=True)
+        phrase, _ = self._parse(draft, text)
+        result = await self._resolve(phrase) if phrase else None
+        self.prepared = (phrase, self.base, result)
+        address = result.address if result and result.status == 'resolved' else (draft.address if not phrase else None)
+        self.reads.partial(self._request(draft, address) if address else None)
+
+    async def respond(self, state: SessionState, text: str) -> str:
+        phrase, changed_budget = self._parse(state, text)
+        prepared, self.prepared = self.prepared, None
         if phrase:
-            phrase = re.sub(r'^(?:нет|стоп|ой)\s+', '', phrase)
-            if re.match(r'^(?:корпус|литера|строение|дробь)\b', phrase) and self.base:
-                phrase = f'{self.base} {phrase}'
-            result = await self.addresses.resolve_address(phrase)
+            result = prepared[2] if prepared and prepared[:2] == (phrase, self.base) else await self._resolve(phrase)
+            if result.status != 'resolved':
+                self.reads.invalidate()
             state.active_offer = None
             state.pending_confirmation = None
             state.revisions['address'] = state.revisions.get('address', 0) + 1
@@ -61,7 +87,8 @@ class Consultation:
         if not state.address:
             return 'Бюджет учтён. Назовите адрес подключения.'
         address = state.address
-        self.coverage_status = (await self.coverage.check_coverage(address.house_id)).status
+        coverage, options = await self.reads.final(self._request(state, address))
+        self.coverage_status = coverage.status
         description = self.describe(address)
         if self.coverage_status == 'unknown':
             return f'{description}: данных о покрытии нет. Отправить запрос на проверку дома?'
@@ -69,7 +96,7 @@ class Consultation:
             return f'{description}: по учебным данным подключения нет. Заявку не создаю.'
         if self.coverage_status == 'error':
             return f'{description}: проверка сейчас недоступна. Передать вопрос специалисту?'
-        options = await self.quotes.quote(QuoteRequest(house_id=address.house_id, on_date=state.on_date or date.fromisoformat(self.quotes.version), catalog_version=self.quotes.version, budget_today=state.budget_today, monthly_budget=state.monthly_budget, needs=state.needs))
+        assert options is not None  # available coverage always joins the matching quote
         if isinstance(options, NoOffer):
             state.active_offer = None
             return options.reason
