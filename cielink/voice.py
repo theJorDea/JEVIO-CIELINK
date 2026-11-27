@@ -1,7 +1,8 @@
 """Local browser bridge. No external model or synthetic CRM side effects."""
 import json
 import os
-import re
+from .consultation import Consultation
+from .quotes import FixtureQuoteAdapter
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -46,16 +47,6 @@ def voice_script():
     return FileResponse(STATIC / 'voice.js', media_type='text/javascript')
 
 
-def training_reply(text: str, fallback: str) -> str:
-    # Stand-only fixtures, no inference of real provider coverage.
-    match = re.search(r'\bкорпус\s+(первый|второй|один|два|[12])\b', text.lower())
-    if not match:
-        return fallback
-    if match[1] in ('два', 'второй', '2'):
-        return 'Учебный корпус два. Данных о покрытии нет. Уточнить адрес для проверки?'
-    return 'Учебный корпус один. В учебной базе подключение доступно.'
-
-
 @router.websocket('/ws/voice')
 async def voice_socket(ws: WebSocket):
     # Browsers must not connect to the local training service from another site.
@@ -68,6 +59,7 @@ async def voice_socket(ws: WebSocket):
     sid = uuid4().hex
     state = SessionState(context=SessionContext(session_id=sid, channel='web'))
     await ws.send_json({'type': 'ready', 'session_id': sid, 'config': config.model_dump()})
+    consultation = Consultation(FixtureQuoteAdapter())
     active_reply = None
     started = False
     seq = 0
@@ -98,7 +90,7 @@ async def voice_socket(ws: WebSocket):
             await ws.send_json({'type': 'event', 'event': {**result.event.model_dump(), 'sequence': seq}})
             if isinstance(inp, FinalInput):
                 active_reply, started = uuid4().hex, False
-                text = training_reply(inp.text, result.next_action.text or 'Уточните адрес подключения.')
+                text = await consultation.respond(state, inp.text)
                 seq += 1
                 await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
                                     'session_id': sid, 'reply_id': active_reply, 'offset_ms': inp.offset_ms, 'text': text}})

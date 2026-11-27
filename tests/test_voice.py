@@ -12,13 +12,13 @@ def test_socket_training_protocol_and_correction(monkeypatch):
         assert ws.receive_json()['type'] == 'error'
         seq = 0
         for attempt in range(3):
-            for kind, text in [('partial', 'корпус'), ('final', 'корпус первый')]:
+            for kind, text in [('partial', 'корпус'), ('final', 'учебная улица 18 корпус первый')]:
                 ws.send_json({'type': kind, 'text': text, 'offset_ms': attempt * 100})
                 e = ws.receive_json()['event']; seq += 1
                 assert (e['type'], e['sequence']) == (kind, seq)
             assert ws.receive_json()['event']['type'] == 'reply_generated'; seq += 1
             reply = ws.receive_json()
-            assert 'один' in reply['text']
+            assert 'корпус 1' in reply['text'] and '1700' in reply['text']
             for kind in ('playback_started', 'playback_interrupted'):
                 ws.send_json({'type': kind, 'reply_id': reply['reply_id'], 'offset_ms': attempt * 100 + 1})
                 assert ws.receive_json()['event']['type'] == kind; seq += 1
@@ -27,7 +27,8 @@ def test_socket_training_protocol_and_correction(monkeypatch):
             e = ws.receive_json()['event']; seq += 1
             assert (e['type'], e['sequence']) == ('final', seq)
             assert ws.receive_json()['event']['type'] == 'reply_generated'; seq += 1
-            assert 'корпус два' in ws.receive_json()['text']
+            answer = ws.receive_json()['text']
+            assert 'корпус 2' in answer and 'на проверку' in answer and '1700' not in answer
 
 
 def test_browser_from_other_site_cannot_open_local_session():

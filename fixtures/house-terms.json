@@ -1,0 +1,8 @@
+{
+  "training-house-a": {
+    "t-400-500-monthly": {"advance_rub": 1700, "mandatory_charges": {"connection": 0, "equipment": 0}}
+  },
+  "training-house-b": {
+    "t-800-1000-monthly": {"advance_rub": 2000, "mandatory_charges": {"connection": 0, "equipment": 0}}
+  }
+}

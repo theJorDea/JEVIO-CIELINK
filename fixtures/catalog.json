@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-11-27",
+  "currency": "RUB",
+  "offers": [
+    {
+      "id": "t-400-500-monthly",
+      "name": "T-400 / T-500",
+      "source_url": "https://skynet.ru/internet/tarify/tarif-internet-t-400-t-500/",
+      "speed_options_mbps": [400, 500],
+      "monthly_rub": 1700,
+      "promo": null,
+      "activation_account_advance_rub": null,
+      "connect_through": null,
+      "charges_rub": {"router_setup": 0, "connection": null, "required_equipment": null},
+      "restricted_addresses": true
+    },
+    {
+      "id": "t-800-1000-monthly",
+      "name": "T-800 / T-1000",
+      "source_url": "https://skynet.ru/internet/tarify/tarif-internet-t-800-t-1000/",
+      "speed_options_mbps": [800, 1000],
+      "monthly_rub": 2000,
+      "promo": null,
+      "activation_account_advance_rub": null,
+      "connect_through": null,
+      "charges_rub": {"router_setup": 0, "connection": null, "required_equipment": null},
+      "restricted_addresses": true
+    },
+    {
+      "id": "hochu-skynet-400",
+      "name": "Хочу СкайНэт 400",
+      "source_url": "https://skynet.ru/internet/tarify/hochu-skynet-400/",
+      "speed_options_mbps": [400],
+      "monthly_rub": 575,
+      "promo": {"after_monthly_rub": null, "duration_months": null, "new_subscribers_only": true, "stackable": false},
+      "activation_account_advance_rub": 2300,
+      "connect_through": "2026-11-30",
+      "charges_rub": {"router_setup": 0, "connection": null, "required_equipment": null},
+      "restricted_addresses": true
+    },
+    {
+      "id": "hochu-skynet-1000",
+      "name": "Хочу СкайНэт 1000",
+      "source_url": "https://skynet.ru/internet/tarify/hochu-skynet-1000/",
+      "speed_options_mbps": [1000],
+      "monthly_rub": 540,
+      "promo": {"after_monthly_rub": null, "duration_months": null, "new_subscribers_only": true, "stackable": false},
+      "activation_account_advance_rub": 1800,
+      "connect_through": "2026-11-30",
+      "charges_rub": {"router_setup": 0, "connection": null, "required_equipment": null},
+      "restricted_addresses": true
+    }
+  ],
+  "synthetic_house_eligibility": [
+    {"house_id": "training-house-a", "eligible_offer_ids": ["t-400-500-monthly", "hochu-skynet-400"]},
+    {"house_id": "training-house-b", "eligible_offer_ids": ["t-800-1000-monthly", "hochu-skynet-1000"]}
+  ]
+}
