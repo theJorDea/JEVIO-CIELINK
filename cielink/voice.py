@@ -59,6 +59,15 @@ class _VoiceConsultation(Consultation):
     # The consent layer can write CRM or consult, never both in one turn. Mark
     # the latter at the boundary rather than duplicating its phrase classifier.
     read_only = False
+    obsolete = False
+
+    async def _resolve(self, phrase):
+        result = await super()._resolve(phrase)
+        if self.obsolete:
+            # Even a cancellation-ignoring address adapter may not select a
+            # new request on the coordinator after a correction took ownership.
+            raise asyncio.CancelledError
+        return result
 
     async def respond(self, state, text):
         self.read_only = True
@@ -95,6 +104,7 @@ async def voice_socket(ws: WebSocket):
     seq = 0
     incoming = asyncio.create_task(ws.receive_text())
     pending = None
+    partial_work = False
     retired = set()
 
     def forget(task):
@@ -128,9 +138,12 @@ async def voice_socket(ws: WebSocket):
                 await asyncio.wait((incoming, pending), return_when=asyncio.FIRST_COMPLETED)
                 # Input wins ties against read-only work. A CRM transaction, on
                 # the other hand, owns its whole turn through receipt publication.
-                if not incoming.done() or not rules.read_only:
+                if not incoming.done() or not rules.read_only or (partial_work and pending.done()):
                     await asyncio.shield(pending)
-                    await publish()
+                    if partial_work:
+                        pending = None
+                    else:
+                        await publish()
                     continue
             raw = await incoming
             incoming = asyncio.create_task(ws.receive_text())
@@ -164,12 +177,18 @@ async def voice_socket(ws: WebSocket):
                 # Keep parsed address/base/budgets, not unpublished products of
                 # the obsolete turn. Detach all mutable turn state before cancel.
                 result.state = result.state.model_copy(deep=True)
-                result.state.active_offer = None
-                rules = copy(rules)
-                rules.coverage_status = rules.prepared = rules.proposed_action = None
+                old_rules = rules
+                rules = copy(old_rules)
+                old_rules.obsolete = True
+                rules.prepared = None
                 rules.reads.invalidate()
-                consultation = ConfirmedDialogue(rules, store)
-                spoken_offer = None
+                if partial_work:
+                    consultation.consultation = rules  # partials never alter consent
+                else:
+                    result.state.active_offer = None
+                    rules.coverage_status = rules.proposed_action = None
+                    consultation = ConfirmedDialogue(rules, store)
+                    spoken_offer = None
                 retired.add(pending)
                 pending.add_done_callback(forget)
                 pending.cancel()
@@ -179,8 +198,10 @@ async def voice_socket(ws: WebSocket):
             seq += 1
             await ws.send_json({'type': 'event', 'event': {**result.event.model_dump(), 'sequence': seq}})
             if isinstance(inp, PartialInput) and not consultation.finished and not consultation.receipt:
-                await rules.partial(state, inp.text)
+                partial_work = rules.read_only = True
+                pending = asyncio.create_task(rules.partial(state, inp.text))
             if isinstance(inp, FinalInput):
+                partial_work = False
                 reply_offset = inp.offset_ms
                 rules.read_only = False
                 pending = asyncio.create_task(consultation.respond(state, inp.text))
@@ -194,10 +215,16 @@ async def voice_socket(ws: WebSocket):
             await asyncio.gather(incoming, return_exceptions=True)
             if pending is not None:
                 if rules.read_only:
+                    rules.obsolete = True
+                    rules.reads.invalidate()
                     pending.cancel()
-                await asyncio.gather(pending, return_exceptions=True)
+                    retired.add(pending)
+                else:
+                    await asyncio.gather(pending, return_exceptions=True)
             receipt = asdict(consultation.receipt) if consultation.receipt else None
             outcome = receipt['operation_type'] if receipt else ('no_action' if consultation.finished else 'disconnected')
             await asyncio.to_thread(review.finish_session, sid, outcome, receipt=receipt,
                                     offer=spoken_offer, coverage_status=rules.coverage_status)
-        await rules.reads.close()
+            await rules.reads.close()
+            if retired:
+                await asyncio.gather(*retired, return_exceptions=True)
