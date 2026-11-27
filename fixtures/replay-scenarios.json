@@ -1,0 +1,9 @@
+[
+  {"id":"order","turns":[{"text":"Учебная 18 корпус 1","partials":["Учебная 18 корпус 1","Учебная 18 корпус один"]},{"text":"да подключайте","receipt":true}],"outcome":"order","coverage":"available","house":"training-house-a","offer":"t-400-500-monthly"},
+  {"id":"unknown","turns":[{"text":"Учебная 18 корпус 2"},{"text":"да проверьте адрес","receipt":true}],"outcome":"coverage_request","coverage":"unknown","house":"uchebnaya-18-k2"},
+  {"id":"decline","turns":[{"text":"Учебная 18 корпус 1"},{"text":"не оформляйте"}],"outcome":"no_action","coverage":"available"},
+  {"id":"ack","turns":[{"text":"Учебная 18 корпус 1","display":false},{"text":"да подключайте"},{"text":"угу"}],"outcome":"disconnected","coverage":"available"},
+  {"id":"duplicate","turns":[{"text":"Учебная 18 корпус 1"},{"text":"да подключайте","receipt":true},{"text":"да подключайте","receipt":true}],"outcome":"order","coverage":"available","house":"training-house-a","offer":"t-400-500-monthly"},
+  {"id":"error","turns":[{"text":"Учебная 18 литера А"},{"text":"да передайте специалисту","receipt":true}],"outcome":"handoff","coverage":"error","house":"uchebnaya-18-la"},
+  {"id":"changed","turns":[{"text":"Учебная 18 корпус 1, до 2200","contains":"Оформить заявку?"},{"text":"корпус два","partials":["строение один","строение один","корпус два"]},{"text":"да подключайте"},{"text":"да проверьте адрес","receipt":true}],"outcome":"coverage_request","coverage":"unknown","house":"uchebnaya-18-k2","monthly_budget":"2200"}
+]
