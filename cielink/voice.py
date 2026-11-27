@@ -1,5 +1,8 @@
 """Local browser bridge. No external model or synthetic CRM side effects."""
+import asyncio
 import json
+from .consent import ConfirmedDialogue
+from .crm import OperationStore
 import os
 from .consultation import Consultation
 from .quotes import FixtureQuoteAdapter
@@ -29,7 +32,7 @@ class VoiceConfig(Contract):
 
 
 class Playback(Contract):
-    type: Literal['playback_started', 'playback_ended', 'playback_interrupted']
+    type: Literal['playback_started', 'playback_ended', 'playback_interrupted', 'text_displayed']
     reply_id: str
     offset_ms: NonNegativeInt
 
@@ -59,7 +62,12 @@ async def voice_socket(ws: WebSocket):
     sid = uuid4().hex
     state = SessionState(context=SessionContext(session_id=sid, channel='web'))
     await ws.send_json({'type': 'ready', 'session_id': sid, 'config': config.model_dump()})
-    consultation = Consultation(FixtureQuoteAdapter())
+    dsn = os.getenv('CIELINK_CRM_URL')
+    if not dsn:
+        Path('local-data').mkdir(exist_ok=True)
+        dsn = 'sqlite:///local-data/crm.sqlite3'
+    store = await asyncio.to_thread(OperationStore, dsn)
+    consultation = ConfirmedDialogue(Consultation(FixtureQuoteAdapter()), store)
     active_reply = None
     started = False
     seq = 0
@@ -75,6 +83,10 @@ async def voice_socket(ws: WebSocket):
                         continue  # late callbacks from a cancelled utterance
                     if inp.type == 'playback_ended' and not started:
                         continue
+                    if inp.type == 'text_displayed' and config.tts != 'text':
+                        continue
+                    if inp.type in ('playback_ended', 'text_displayed'):
+                        consultation.delivered()
                     started = inp.type == 'playback_started'
                     if not started:
                         active_reply = None

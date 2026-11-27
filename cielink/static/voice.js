@@ -38,7 +38,8 @@ function interrupt() {
 function reply({ reply_id, text }) {
   interrupt();
   el("reply").textContent = text;
-  if (config.tts !== "browser" || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+  if (config.tts === "text") { send("text_displayed", { reply_id }); return; }
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "ru-RU";
   playback = { reply_id, utterance };
