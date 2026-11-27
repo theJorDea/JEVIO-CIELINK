@@ -118,19 +118,21 @@ class ReviewStore:
         return c.execute('SELECT type,offset_ms,text FROM events WHERE session_id=? ORDER BY offset_ms,id', (sid,))
 
     def analyze_next(self):
-        # Analyze one finished session transactionally. A terminated worker leaves it pending.
+        # Finished event streams are immutable. Snapshot then release the database
+        # before analysis so a slow review cannot delay an active call's writes.
         with self._connect() as c:
-            c.execute('BEGIN IMMEDIATE')
             row = c.execute("SELECT id,receipt FROM sessions WHERE status='finished' AND analysis_status='pending' ORDER BY rowid LIMIT 1").fetchone()
             if row is None:
                 return None
             sid = row['id']
-            try:
-                findings = _review(self._events(c, sid), json.loads(row['receipt'] or 'null'))
-                status = 'complete' if findings else 'missing'
-            except (TypeError, ValueError):
-                findings, status = [], 'error'
-            c.execute('UPDATE sessions SET findings=?,analysis_status=? WHERE id=?', (json.dumps(findings), status, sid))
+            events = list(self._events(c, sid))
+        try:
+            findings = _review(events, json.loads(row['receipt'] or 'null'))
+            status = 'complete' if findings else 'missing'
+        except (TypeError, ValueError):
+            findings, status = [], 'error'
+        with self._connect() as c:
+            c.execute("UPDATE sessions SET findings=?,analysis_status=? WHERE id=? AND analysis_status='pending'", (json.dumps(findings), status, sid))
             return status
 
     def track_path(self, sid, track_id):

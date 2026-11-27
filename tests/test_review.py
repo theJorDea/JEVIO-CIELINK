@@ -88,6 +88,20 @@ def test_delivery_audit_uses_only_bound_verified_evidence(store):
                         10: 'operation_match', 11: 'receipt_mismatch', 12: 'price_mismatch'}
 
 
+def test_active_call_can_write_during_review(store, monkeypatch):
+    finished = store.start_session()
+    store.finish_session(finished, 'no_action')
+    active = store.start_session()
+
+    def analyze(events, receipt):
+        store.append_event(active, 'final', 5, 'корпус второй')
+        return []
+
+    monkeypatch.setattr('cielink.review._review', analyze)
+    assert store.analyze_next() == 'missing'
+    assert store.detail(active)['events'][0]['text'] == 'корпус второй'
+
+
 def test_watch_processes_later_call_without_inventing_receipt(store, monkeypatch):
     sid = store.start_session()
     calls = []
