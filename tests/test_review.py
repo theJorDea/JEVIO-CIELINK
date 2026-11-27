@@ -79,12 +79,13 @@ def test_delivery_audit_uses_only_bound_verified_evidence(store):
     deliver(9, 'Сохранено. Номер abc.', None)
     store.append_event(sid, 'text_displayed', 10, 'Заявка на подключение оформлена.')
     deliver(11, 'Сохранено. Номер wrong.', None)
+    deliver(12, 'Сегодня внести 100 рублей: аванс 100, обязательные доплаты 0. Далее ежемесячно 700 рублей. Оформить заявку?', offer)
     store.finish_session(sid, 'order', offer=offer, receipt={'receipt_id': 'abc', 'operation_type': 'order'})
     assert store.analyze_next() == 'complete'
     findings = {f['start_ms']: f['code'] for f in store.detail(sid)['findings'] if 'code' in f}
     assert findings == {3: 'price_mismatch', 4: 'price_match', 5: 'price_unverified',
                         6: 'price_unverified', 8: 'operation_mismatch', 9: 'receipt_match',
-                        10: 'operation_match', 11: 'receipt_mismatch'}
+                        10: 'operation_match', 11: 'receipt_mismatch', 12: 'price_mismatch'}
 
 
 def test_watch_processes_later_call_without_inventing_receipt(store, monkeypatch):

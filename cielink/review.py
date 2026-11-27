@@ -158,7 +158,7 @@ def _audit_delivery(text, offer, receipt):
     for clause in clauses:
         clause = clause.rstrip('.!')
         price_clause = re.sub(r'^сегодня внести \d+(?:[.,]\d{1,2})? рублей,\s+', '', clause)
-        price = _PRICE.fullmatch(price_clause)
+        price = _PRICE.fullmatch(price_clause.removeprefix('далее '))
         if price:
             amount = Decimal((price[1] or price[2]).replace(',', '.'))
             periods = offer.get('periods') if isinstance(offer, dict) else None
