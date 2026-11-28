@@ -13,6 +13,7 @@ asr = [
     "gigaam[torch] @ git+https://github.com/salute-developers/GigaAM.git@e9bbf2e773eedd217c6f0d3b89b9728c41332b7d",
 ]
 voice-test = [
+    "num2words>=0.5.14,<1",
     "scipy>=1.12",
     "sounddevice>=0.5",
     "websockets>=14",
