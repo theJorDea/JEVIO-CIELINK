@@ -4,5 +4,8 @@
   },
   "training-house-b": {
     "t-800-1000-monthly": {"advance_rub": 2000, "mandatory_charges": {"connection": 0, "equipment": 0}}
+  },
+  "demo-pushkina-12-k13": {
+    "demo-promo-400": {"mandatory_charges": {"connection": 0, "equipment": 0}}
   }
 }

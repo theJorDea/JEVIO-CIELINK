@@ -29,7 +29,7 @@ function RecordView({summary,refresh}: {summary: Summary; refresh:number}) {
       {(['error','analysis_error'] as const).map(k => data[k] != null && <div key={k} className="problem"><strong>{k === 'error' ? 'Ошибка сессии' : 'Ошибка анализа'}</strong><div><Value value={data[k]}/></div></div>)}
       <Evidence events={data.events} tracks={data.tracks} findings={data.findings}/>
       <section><h3>Результат консультации</h3><dl className="results">{[
-        ['Покрытие',data.coverage_status,'Статус покрытия не передан.'],['Предложение',data.offer,'Нет данных о предложении.'],['Квитанция CRM',data.receipt,'Квитанция не получена.']
+        ['Адрес',data.address,'Адрес не зафиксирован.'],['Покрытие',data.coverage_status,'Статус покрытия не передан.'],['Предложение',data.offer,'Нет данных о предложении.'],['Квитанция CRM',data.receipt,'Квитанция не получена.']
       ].map(([label,value,fallback]) => <div key={String(label)}><dt>{String(label)}</dt><dd><Value value={value} fallback={String(fallback)}/></dd></div>)}</dl></section>
     </>}
   </article>;

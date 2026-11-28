@@ -52,8 +52,32 @@ async def reply(ws, offset, seq):
     generated = await event(ws, 'reply_generated', seq)
     msg = await receive(ws)
     assert msg == dict(type='reply', text=generated['text'], reply_id=generated['reply_id'],
-                       input_offset_ms=offset)
+                       input_offset_ms=offset, route=generated['route'])
     return msg
+
+
+def test_corrected_house_before_street_and_price_reach_review(tmp_path, monkeypatch):
+    async def exercise():
+        async with voice_client(tmp_path, monkeypatch) as ws:
+            sid = (await receive(ws))['session_id']
+            for i, (text, expected) in enumerate([
+                ('Дом 1, корпус 3. Ой, нет, корпус 5.', 'дом 1 корпус 5'),
+                ('Улицы Пушкина.', 'Улица Пушкина, дом 1, корпус 5'),
+                ('Ну ладно, а сколько будет стоить всё?', '1700 рублей в месяц'),
+            ]):
+                offset = 2 * i + 1
+                await send(ws, 'final', offset, text=text)
+                await event(ws, 'final', 3 * i + 1)
+                answer = await reply(ws, offset, 3 * i + 2)
+                assert expected in answer['text']
+                await send(ws, 'text_displayed', offset + 1, reply_id=answer['reply_id'])
+                await event(ws, 'text_displayed', 3 * i + 3)
+        detail = ReviewStore().detail(sid)
+        assert detail['address'] == 'Улица Пушкина, дом 1, корпус 5'
+        assert detail['offer']['house_id'] == 'demo-pushkina-1-k5'
+        assert detail['coverage_status'] == 'available' and detail['receipt'] is None
+
+    asyncio.run(exercise())
 
 
 def test_correction_beats_uncancellable_read(tmp_path, monkeypatch):

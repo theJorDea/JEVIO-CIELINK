@@ -53,6 +53,9 @@ class ConfirmedDialogue:
             return f'Операция уже сохранена. Номер {self.receipt.spoken_reference}.'
         if self.finished:
             return 'Обращение завершено без заявки.'
+        if phrase == 'пока не оформляйте':
+            self.proposal = self.last_order = None
+            return 'Хорошо, ничего не оформляю. Можем продолжить консультацию.'
         clarifying = state.pending_clarification is not None and phrase in {'да', 'нет'}
         if not clarifying and phrase in {'нет', 'не надо', 'не оформляйте', 'отказываюсь', 'не хочу', 'подумаю', 'я подумаю', 'мне надо подумать'}:
             self.proposal = None
@@ -68,7 +71,8 @@ class ConfirmedDialogue:
                     if offer == state.active_offer and request == self.consultation._request(state, state.address):
                         return self._propose(state, 'order', prompt)
                 return self._without_proposal(state)
-            if not p.delivered or phrase not in _ALLOWED[p.kind]:
+            equipment_confirmation = phrase == 'да' and p.kind == 'handoff' and 'equipment' in p.terms
+            if not p.delivered or (phrase not in _ALLOWED[p.kind] and not equipment_confirmation):
                 p.delivered = False
                 if phrase == 'да' and p.kind == 'order':
                     cue = ' Чтобы подтвердить подключение, скажите: «да, оформляйте».'
@@ -93,20 +97,22 @@ class ConfirmedDialogue:
             kind, prompt = 'handoff', 'Передать специалисту ваш вопрос и собранные условия?'
         else:
             prompt = await self.consultation.respond(state, text)
+            kind = self.consultation.proposed_action
             if not state.address:
+                if kind == 'handoff':
+                    return self._propose(state, kind, prompt, question=text)
                 return prompt
             status = self.consultation.coverage_status
-            if status == 'unavailable':
+            if status == 'unavailable' and kind != 'handoff':
                 self.finished = True
                 return prompt
-            kind = self.consultation.proposed_action
             if not kind:
                 return prompt
         if kind == 'order':
             self.last_order = (self.consultation._request(state, state.address), state.active_offer, prompt)
-        return self._propose(state, kind, prompt)
+        return self._propose(state, kind, prompt, question=text if kind == 'handoff' else None)
 
-    def _propose(self, state, kind, prompt):
+    def _propose(self, state, kind, prompt, *, question=None):
         self.proposal = Proposal(kind, uuid4().hex, {
             'address': state.address.model_dump(mode='json') if state.address else None,
             'offer': state.active_offer.model_dump(mode='json') if state.active_offer and kind == 'order' else None,
@@ -114,4 +120,8 @@ class ConfirmedDialogue:
             'monthly_budget': str(state.monthly_budget) if state.monthly_budget is not None else None,
             'revisions': dict(state.revisions), 'prompt': prompt, 'needs': list(state.needs),
         }, prompt)
+        if question is not None:
+            self.proposal.terms['question'] = question
+        if kind == 'handoff' and self.consultation.selected_equipment and self.consultation.discussing_equipment:
+            self.proposal.terms['equipment'] = dict(self.consultation.selected_equipment)
         return prompt

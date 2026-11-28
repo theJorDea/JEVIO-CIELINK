@@ -175,7 +175,7 @@ async def run_call(agi, speech, store, review, directory):
 
     outcome = 'engine_failure'
     offer = None
-    reply = 'Здравствуйте. Это учебный помощник. Назовите адрес подключения.'
+    reply = 'Здравствуйте. Я голосовой помощник по подключению интернета. По какому адресу проверить подключение?'
     try:
         for turn in range(21):
             terminal = bool(dialogue.receipt or dialogue.finished)
@@ -212,7 +212,8 @@ async def run_call(agi, speech, store, review, directory):
         await rules.reads.close()
         receipt = asdict(dialogue.receipt) if dialogue.receipt else None
         review.finish_session(sid, receipt['operation_type'] if receipt else outcome, receipt=receipt,
-                              offer=offer, coverage_status=rules.coverage_status)
+                              offer=offer, coverage_status=rules.coverage_status,
+                              address=rules.describe(state.address) if state.address else None)
 
 
 def main():

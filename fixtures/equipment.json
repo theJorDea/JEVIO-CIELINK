@@ -1,0 +1,4 @@
+[
+  {"id": "basic", "name": "Базовый Wi-Fi", "price_rub": 2400, "description": "для обычных домашних задач"},
+  {"id": "dual-band", "name": "Двухдиапазонный Wi-Fi", "price_rub": 3900, "description": "поддерживает два диапазона Wi-Fi"}
+]

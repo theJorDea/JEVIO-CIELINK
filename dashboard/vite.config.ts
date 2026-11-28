@@ -1,10 +1,10 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   server: {
     host: '127.0.0.1',
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
+      '/api': loadEnv(mode, '.', 'CIELINK_DASHBOARD_').CIELINK_DASHBOARD_API || 'http://127.0.0.1:8001',
     },
   },
-});
+}));

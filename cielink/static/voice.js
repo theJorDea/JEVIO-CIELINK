@@ -32,7 +32,7 @@ function interrupt() {
   const { reply_id } = playback;
   playback = null; // cancel() may dispatch stale end/error callbacks.
   window.speechSynthesis.cancel();
-  send("playback_interrupted", { reply_id });
+  if (reply_id) send("playback_interrupted", { reply_id });
   el("ttsStatus").textContent = "Озвучивание остановлено.";
   controls();
 }
@@ -42,7 +42,7 @@ function reply({ reply_id, text, input_offset_ms }) {
   if (input_offset_ms !== undefined && input_offset_ms < latestInput) return;
   interrupt();
   el("reply").textContent = text;
-  if (config.tts === "text") { send("text_displayed", { reply_id }); return; }
+  if (config.tts === "text") { if (reply_id) send("text_displayed", { reply_id }); return; }
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "ru-RU";
@@ -51,14 +51,14 @@ function reply({ reply_id, text, input_offset_ms }) {
   utterance.onstart = () => {
     if (playback?.utterance !== utterance) return;
     el("ttsStatus").textContent = "Идёт озвучивание.";
-    send("playback_started", { reply_id });
+    if (reply_id) send("playback_started", { reply_id });
   };
   utterance.onend = utterance.onerror = event => {
     if (playback?.utterance !== utterance) return;
     playback = null;
     const failed = event.type === "error";
     el("ttsStatus").textContent = failed ? `Ошибка озвучивания: ${event.error}.` : "Озвучивание завершено.";
-    send(failed ? "playback_interrupted" : "playback_ended", { reply_id });
+    if (reply_id) send(failed ? "playback_interrupted" : "playback_ended", { reply_id });
     controls();
   };
   window.speechSynthesis.speak(utterance);
@@ -140,6 +140,7 @@ el("connect").onclick = () => {
       el("status").textContent = `Сеанс ${msg.session_id} открыт.`;
       el("micStatus").textContent = config.stt === "text" ? "Режим текстового ввода." : Recognition ? "Микрофон выключен." : "Распознавание недоступно. Используйте ручной ввод.";
       el("ttsStatus").textContent = config.tts === "text" ? "Ответы без озвучивания." : window.speechSynthesis && window.SpeechSynthesisUtterance ? "Озвучивание готово." : "Озвучивание недоступно. Ответы будут показаны текстом.";
+      if (msg.greeting) reply({ text: msg.greeting });
       controls();
     } else if (msg.type === "reply" && config) reply(msg);
     else if (msg.type === "error") el("status").textContent = `Ошибка: ${msg.message}`;

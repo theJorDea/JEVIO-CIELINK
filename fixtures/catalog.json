@@ -50,10 +50,23 @@
       "connect_through": "2026-11-30",
       "charges_rub": {"router_setup": 0, "connection": null, "required_equipment": null},
       "restricted_addresses": true
+    },
+    {
+      "id": "demo-promo-400",
+      "name": "Учебная акция 400",
+      "source_url": "urn:cielink:training:demo-promo-400",
+      "speed_options_mbps": [400],
+      "monthly_rub": 950,
+      "promo": {"after_monthly_rub": 1450, "duration_months": 3, "new_subscribers_only": false, "stackable": false},
+      "activation_account_advance_rub": 1450,
+      "connect_through": null,
+      "charges_rub": {"connection": 0, "required_equipment": 0},
+      "restricted_addresses": true
     }
   ],
   "synthetic_house_eligibility": [
     {"house_id": "training-house-a", "eligible_offer_ids": ["t-400-500-monthly", "hochu-skynet-400"]},
-    {"house_id": "training-house-b", "eligible_offer_ids": ["t-800-1000-monthly", "hochu-skynet-1000"]}
+    {"house_id": "training-house-b", "eligible_offer_ids": ["t-800-1000-monthly", "hochu-skynet-1000"]},
+    {"house_id": "demo-pushkina-12-k13", "eligible_offer_ids": ["demo-promo-400"]}
   ]
 }

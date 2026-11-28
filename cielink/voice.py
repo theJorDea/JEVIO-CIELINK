@@ -10,6 +10,7 @@ from anyio import CancelScope
 import os
 from .consultation import Consultation
 from .quotes import FixtureQuoteAdapter
+from .voice_routing import explanation, local_route, payment_answer, payment_request, split_social
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -71,7 +72,38 @@ class _VoiceConsultation(Consultation):
 
     async def respond(self, state, text):
         self.read_only = True
-        return await super().respond(state, text)
+        self.proposed_action = None
+        body, social = split_social(text)
+        if social:
+            self.route = social
+            if social == 'local:thanks':
+                return 'Пожалуйста!'
+            if social == 'local:filler':
+                return 'Да, слушаю вас.'
+            if social == 'local:farewell':
+                return 'До свидания!'
+            return ('Да, я вас слышу. Чем могу помочь?' if text.casefold().startswith('ал')
+                    else 'Здравствуйте! Чем могу помочь?')
+        text = body
+        self.route = local_route(text)
+        if payment_request(text):
+            return payment_answer(text)
+        if educational := await explanation(text):
+            answer, self.route = educational
+            return answer
+        answer = await super().respond(state, text)
+        if 'equipment' in self.lookup_trace or (self.discussing_equipment and self.proposed_action == 'handoff'):
+            self.route = 'local:equipment'
+        return answer
+
+
+async def _routed_turn(dialogue, rules, state, text):
+    # Keep proposal invalidation, delivery and transaction semantics owned by
+    # ConfirmedDialogue. A branch which never enters consultation is local CRM.
+    rules.route = 'local:crm'
+    body, social = split_social(text)
+    answer = await dialogue.respond(state, text if social else body)
+    return answer, rules.route
 
 
 @router.websocket('/ws/voice')
@@ -87,7 +119,8 @@ async def voice_socket(ws: WebSocket):
     state = SessionState(context=SessionContext(session_id=sid, channel='web'))
     review = await asyncio.to_thread(ReviewStore)
     await asyncio.to_thread(review.start_session, sid)
-    await ws.send_json({'type': 'ready', 'session_id': sid, 'config': config.model_dump()})
+    await ws.send_json({'type': 'ready', 'session_id': sid, 'config': config.model_dump(),
+                        'greeting': 'Здравствуйте! Я помогу проверить адрес и подобрать домашний интернет. Чем могу помочь?'})
     dsn = os.getenv('CIELINK_CRM_URL')
     if not dsn:
         Path('local-data').mkdir(exist_ok=True)
@@ -114,7 +147,7 @@ async def voice_socket(ws: WebSocket):
 
     async def publish():
         nonlocal pending, active_reply, started, spoken_offer, spoken_text, seq
-        text = pending.result()
+        text, route = pending.result()
         pending = None
         active_reply, started = uuid4().hex, False
         spoken_text = text
@@ -123,12 +156,15 @@ async def voice_socket(ws: WebSocket):
         seq += 1
         await ws.send_json({'type': 'event', 'event': {'type': 'reply_generated', 'sequence': seq,
                             'session_id': sid, 'reply_id': active_reply, 'offset_ms': reply_offset,
-                            'text': text, 'reads': list(rules.reads.trace), 'context': {
+                            'text': text, 'route': route, 'reads': list(rules.reads.trace), 'context': {
                                 'house_id': state.address.house_id if state.address else None,
                                 'monthly_budget': str(state.monthly_budget) if state.monthly_budget is not None else None,
-                                'needs': list(state.needs)}}})
+                                'needs': list(state.needs)}, 'lookups': rules.lookup_trace,
+                            'operation': ({'type': consultation.receipt.operation_type,
+                                           'number': consultation.receipt.spoken_reference}
+                                          if consultation.receipt else None)}})
         await ws.send_json({'type': 'reply', 'text': text, 'reply_id': active_reply,
-                            'input_offset_ms': reply_offset})
+                            'input_offset_ms': reply_offset, 'route': route})
         with CancelScope(shield=True):
             await record('reply_generated', reply_offset, text)
 
@@ -204,7 +240,8 @@ async def voice_socket(ws: WebSocket):
                 partial_work = False
                 reply_offset = inp.offset_ms
                 rules.read_only = False
-                pending = asyncio.create_task(consultation.respond(state, inp.text))
+                rules.lookup_trace = {}
+                pending = asyncio.create_task(_routed_turn(consultation, rules, state, inp.text))
     except WebSocketDisconnect:
         return
     finally:
@@ -224,7 +261,8 @@ async def voice_socket(ws: WebSocket):
             receipt = asdict(consultation.receipt) if consultation.receipt else None
             outcome = receipt['operation_type'] if receipt else ('no_action' if consultation.finished else 'disconnected')
             await asyncio.to_thread(review.finish_session, sid, outcome, receipt=receipt,
-                                    offer=spoken_offer, coverage_status=rules.coverage_status)
+                                    offer=spoken_offer, coverage_status=rules.coverage_status,
+                                    address=rules.describe(state.address) if state.address else None)
             await rules.reads.close()
             if retired:
                 await asyncio.gather(*retired, return_exceptions=True)

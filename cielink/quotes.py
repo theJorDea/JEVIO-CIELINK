@@ -3,13 +3,16 @@ import json
 from datetime import date
 from pathlib import Path
 
+from .addresses import OFFER_PROFILES
+from .demo_storage import DemoAddressStore
 from .domain import NoOffer, Offer, Offers, PricePeriod, QuoteRequest, QuoteResult
 
 FIXTURES = Path(__file__).resolve().parent.parent / 'fixtures'
 
 
 class FixtureQuoteAdapter:
-    def __init__(self):
+    def __init__(self, demo_store=None):
+        self.demo_store = demo_store if demo_store is not None else DemoAddressStore()
         snapshot = json.loads((FIXTURES / 'catalog.json').read_text(encoding='utf-8'))
         self.version = snapshot['snapshot_date']
         self.offers = {row['id']: row for row in snapshot['offers']}
@@ -21,9 +24,13 @@ class FixtureQuoteAdapter:
             return NoOffer(reason='Версия каталога изменилась. Требуется новый расчёт.')
         candidates = []
         exclusions = []
-        for offer_id in self.eligibility.get(request.house_id, []):
+        profile = OFFER_PROFILES.get(request.house_id, request.house_id)
+        if (profile not in self.eligibility and request.house_id.startswith('demo-')
+                and self.demo_store.status(request.house_id) == 'available'):
+            profile = 'training-house-a'  # Borrow prices only; offers retain the requested house ID.
+        for offer_id in self.eligibility.get(profile, []):
             row = self.offers[offer_id]
-            terms = self.house_terms.get(request.house_id, {}).get(offer_id, {})
+            terms = self.house_terms.get(profile, {}).get(offer_id, {})
             reason = self._exclude(row, terms, request)
             if reason:
                 exclusions.append(f"{row['name']}: {reason}")

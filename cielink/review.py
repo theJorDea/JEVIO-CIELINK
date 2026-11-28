@@ -20,7 +20,7 @@ _SCHEMA = '''
 CREATE TABLE IF NOT EXISTS sessions (
  id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active', outcome TEXT,
  analysis_status TEXT NOT NULL DEFAULT 'pending', receipt TEXT, offer TEXT,
- coverage_status TEXT, findings TEXT NOT NULL DEFAULT '[]');
+ coverage_status TEXT, findings TEXT NOT NULL DEFAULT '[]', address TEXT);
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
  type TEXT NOT NULL, offset_ms INTEGER NOT NULL CHECK(offset_ms >= 0), text TEXT);
@@ -53,6 +53,10 @@ class ReviewStore:
         self.db.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            if 'address' not in {r['name'] for r in conn.execute('PRAGMA table_info(sessions)')}:
+                conn.execute('BEGIN IMMEDIATE')
+                if 'address' not in {r['name'] for r in conn.execute('PRAGMA table_info(sessions)')}:
+                    conn.execute('ALTER TABLE sessions ADD COLUMN address TEXT')
 
     @contextmanager
     def _connect(self):
@@ -89,10 +93,10 @@ class ReviewStore:
             c.execute('INSERT INTO tracks(session_id,role,path,start_ms) VALUES (?,?,?,?)',
                       (session_id, role, str(relative), start_ms))
 
-    def finish_session(self, session_id, outcome, *, receipt=None, offer=None, coverage_status=None):
+    def finish_session(self, session_id, outcome, *, receipt=None, offer=None, coverage_status=None, address=None):
         with self._active(session_id) as c:
-            c.execute("UPDATE sessions SET status='finished',outcome=?,receipt=?,offer=?,coverage_status=? WHERE id=?",
-                      (outcome, json.dumps(receipt), json.dumps(offer), coverage_status, session_id))
+            c.execute("UPDATE sessions SET status='finished',outcome=?,receipt=?,offer=?,coverage_status=?,address=? WHERE id=?",
+                      (outcome, json.dumps(receipt), json.dumps(offer), coverage_status, address, session_id))
 
     def list_sessions(self):
         with self._connect() as c:
@@ -146,9 +150,9 @@ class ReviewStore:
 _AMOUNT = r'(\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?)'
 _RUB = r'(?:рублей|рубля|рубль|руб\.?|₽)'
 _MONTHLY = rf'(?:ежемесячно\s+{_AMOUNT}\s*{_RUB}|{_AMOUNT}\s*{_RUB}\s+в месяц)'
-_TODAY = rf'сегодня внести\s+{_AMOUNT}\s*{_RUB}'
+_TODAY = rf'(?:сегодня внести|при подключении нужно внести)\s+{_AMOUNT}\s*{_RUB}(?: на счёт)?'
 _ADVANCE = rf'аванс\s+{_AMOUNT}(?:\s*{_RUB})?'
-_FEES = rf'обязательные доплаты\s+{_AMOUNT}(?:\s*{_RUB})?'
+_FEES = rf'обязательные доплаты\s+(?:—\s+)?{_AMOUNT}(?:\s*{_RUB})?'
 _DURATION = r' в течение (\d+) (?:мес\.?|месяц(?:а|ев)?)'
 
 
@@ -190,6 +194,12 @@ def _audit_prices(clause, offer):
         if match := re.fullmatch(pattern, clause):
             yield _comparison(label, match[1], expected)
             return
+    if match := re.fullmatch(rf'из них {_AMOUNT}\s*{_RUB} пойдут на счёт', clause):
+        yield _comparison('Аванс', match[1], advance)
+        return
+    if clause == 'обязательных доплат нет':
+        yield _comparison('Обязательные доплаты', '0', fees)
+        return
 
     periods = offer.get('periods')
     periods = periods if isinstance(periods, list) and all(isinstance(p, dict) for p in periods) else []

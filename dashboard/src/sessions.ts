@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { EvidenceEvent, Finding, Track } from './Evidence';
 
 export type Summary = { id: string; status?: string | null; outcome?: string | null; analysis_status?: string | null };
-export type Session = Summary & { events?: EvidenceEvent[] | null; tracks?: Track[] | null; findings?: Finding[] | null; receipt?: unknown; offer?: unknown; coverage_status?: unknown; error?: unknown; analysis_error?: unknown };
+export type Session = Summary & { events?: EvidenceEvent[] | null; tracks?: Track[] | null; findings?: Finding[] | null; receipt?: unknown; offer?: unknown; address?: string | null; coverage_status?: unknown; error?: unknown; analysis_error?: unknown };
 const record = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === 'object' && !Array.isArray(x);
 const summary = (x: unknown): x is Summary => record(x) && typeof x.id === 'string' && x.id.length > 0 && ['status','outcome','analysis_status'].every(k => x[k] == null || typeof x[k] === 'string');
 const invalid = () => new Error('Формат ответа не соответствует API.');

@@ -4,7 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const asset = name => readFileSync(new URL(`../cielink/static/voice.${name}`, import.meta.url), 'utf8');
-function client({ stt = 'browser', tts = 'browser' } = {}) {
+function client({ stt = 'browser', tts = 'browser', greeting } = {}) {
   const ui = Object.fromEntries(Array.from(asset('html').matchAll(/id="(\w+)"/g), ([, id]) =>
     [id, { textContent: '', append(s) { this.textContent += s; } }]));
   let ws, mic, utterance;
@@ -26,9 +26,17 @@ function client({ stt = 'browser', tts = 'browser' } = {}) {
     window, ...window, WebSocket: Socket, location: { protocol: 'https:', host: 'example.test' } });
   ui.connect.onclick();
   const receive = msg => ws.onmessage({ data: JSON.stringify(msg) });
-  receive({ type: 'ready', session_id: 'test', config: { stt, tts, llm: 'rules' } });
+  receive({ type: 'ready', session_id: 'test', greeting, config: { stt, tts, llm: 'rules' } });
   return { ui, sent, receive, ws, get mic() { return mic; }, get speech() { return utterance; } };
 }
+
+test('the initial greeting is spoken without sending an offer-delivery event', () => {
+  const c = client({ greeting: 'Здравствуйте!' });
+  assert.equal(c.ui.reply.textContent, 'Здравствуйте!');
+  c.speech.onstart();
+  c.speech.onend({ type: 'end' });
+  assert.deepEqual(c.sent, []);
+});
 
 test('speech barge-in reports exactly one interruption and ignores obsolete callbacks', () => {
   const c = client();
