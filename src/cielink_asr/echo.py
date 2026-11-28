@@ -11,6 +11,8 @@ from math import ceil
 from threading import Event, Lock
 from typing import Any
 
+from .llm import LLMError
+
 
 class _InterruptiblePlayback:
     def __init__(self, np: Any) -> None:
@@ -171,6 +173,7 @@ def _run_live_conversation(
     samples_per_asr_chunk = 320 * 16
     silence_frames_required = ceil(silence_ms / frame_ms)
     input_frames: queue.Queue[Any] = queue.Queue(maxsize=256)
+    dropped_input = Event()
     playback = _InterruptiblePlayback(np)
     backend = _VoiceBackend(voice_url) if voice_url else None
     active_reply_id: str | None = None
@@ -192,7 +195,7 @@ def _run_live_conversation(
         try:
             input_frames.put_nowait(indata[:, 0].copy())
         except queue.Full:
-            pass
+            dropped_input.set()
 
         playback.render(outdata, frames)
 
@@ -221,6 +224,8 @@ def _run_live_conversation(
 
             while True:
                 frame = input_frames.get()
+                if dropped_input.is_set():
+                    raise RuntimeError('Microphone frames lost during processing; incomplete audio must not be sent. Restart the live test.')
                 while True:
                     try:
                         event = playback.events.get_nowait()
@@ -291,7 +296,7 @@ def _run_live_conversation(
                     llm_answered = False
                     if consultation:
                         turn = consultation.process(transcript)
-                        reply = turn.reply
+                        reply = turn.reply or 'Могу уточнить адрес в справочнике. Цены и возможность подключения здесь не подтверждаются.'
                         llm_answered = bool(turn.reply)
                     if llm and not llm_answered and (
                         not consultation or not consultation.connection_requested

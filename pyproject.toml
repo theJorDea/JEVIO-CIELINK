@@ -24,7 +24,7 @@ voice-test = [
     "brotlicffi>=1.2.1.0",
     "omnivoice>=0.2.1",
 ]
-test = ["pytest>=8"]
+test = ["pytest>=8", "numpy>=1.26", "torch>=2"]
 
 [project.scripts]
 cielink-asr = "cielink_asr.cli:main"

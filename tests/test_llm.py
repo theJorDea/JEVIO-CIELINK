@@ -46,6 +46,22 @@ def test_ollama_request_uses_local_chat_api():
     assert timeout == 45.0
 
 
+def test_ollama_does_not_inherit_openai_credentials(monkeypatch):
+    monkeypatch.setenv('CIELINK_LLM_PROVIDER', 'ollama')
+    monkeypatch.setenv('OPENAI_API_KEY', 'not-for-ollama')
+    monkeypatch.delenv('CIELINK_LLM_API_KEY', raising=False)
+    assert ChatClient.from_env().api_key is None
+
+
+def test_custom_endpoint_requires_explicit_credentials(monkeypatch):
+    monkeypatch.setenv('CIELINK_LLM_PROVIDER', 'openai-compatible')
+    monkeypatch.setenv('CIELINK_LLM_BASE_URL', 'https://api.example.test/v1')
+    monkeypatch.setenv('OPENAI_API_KEY', 'not-for-custom-endpoint')
+    monkeypatch.delenv('CIELINK_LLM_API_KEY', raising=False)
+    with pytest.raises(ValueError):
+        ChatClient.from_env()
+
+
 def test_chat_request_preserves_recent_conversation_history():
     requests = []
 

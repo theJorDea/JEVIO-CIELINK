@@ -156,6 +156,13 @@ class KokoroTTS:
         phonemes, unknown = self._g2p(text)
         if unknown:
             raise ValueError(f"Kokoro-RU cannot pronounce symbols: {''.join(sorted(unknown))}")
+        if not phonemes:
+            raise ValueError('Text contains no pronounceable phonemes')
+        limit = len(self._voice)
+        pieces = [self._synthesize_piece(phonemes[i:i + limit]) for i in range(0, len(phonemes), limit)]
+        return pieces[0] if len(pieces) == 1 else self._np.concatenate(pieces)
+
+    def _synthesize_piece(self, phonemes: str) -> Any:
         input_ids = self._np.asarray(
             [[0, *(self._vocab[symbol] for symbol in phonemes), 0]], dtype=self._np.int64
         )

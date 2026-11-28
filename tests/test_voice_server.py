@@ -39,6 +39,8 @@ def test_websocket_handler_sends_ready_and_reply_events():
             self.sent = []
             self.incoming = iter(
                 [
+                    '[]',
+                    json.dumps({'type': 'final', 'text': None}),
                     json.dumps({"type": "final", "text": "Хочу интернет"}),
                     json.dumps({"type": "final", "text": "Для квартиры"}),
                 ]
@@ -60,9 +62,9 @@ def test_websocket_handler_sends_ready_and_reply_events():
     asyncio.run(_handle(websocket, AddressCatalog.from_json(sample_catalog()), None))
 
     assert websocket.sent[0]["type"] == "ready"
-    assert [event["type"] for event in websocket.sent[1:]] == ["reply", "reply"]
-    assert "квартиру" in websocket.sent[1]["text"]
-    assert "улицу" in websocket.sent[2]["text"]
+    assert [event["type"] for event in websocket.sent[1:]] == ["error", "error", "reply", "reply"]
+    assert "квартиру" in websocket.sent[3]["text"]
+    assert "улицу" in websocket.sent[4]["text"]
 
 
 def test_voice_session_keeps_support_outside_new_connection_flow():

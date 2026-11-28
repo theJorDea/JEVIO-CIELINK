@@ -49,6 +49,11 @@ def test_kokoro_uses_phonemes_and_voice_style_for_onnx_inference():
     assert inputs["style"].shape == (1, 256)
     assert inputs["speed"].tolist() == [1.0]
 
+    calls.clear()
+    tts._g2p = lambda text: ('a' * 511, set())
+    assert len(tts.synthesize('длинная реплика')) == 4
+    assert [call[1]['input_ids'].shape[1] for call in calls] == [512, 3]
+
 
 def test_kokoro_rejects_unknown_phonemes():
     tts = KokoroTTS.__new__(KokoroTTS)

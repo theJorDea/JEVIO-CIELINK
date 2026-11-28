@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -67,18 +68,18 @@ class Consultation:
     def address_mentions(self, text: str) -> tuple[AddressMatch, ...]:
         self.address_changed_this_turn = False
         normalized_text = " ".join(text.casefold().replace("ё", "е").split())
-        if self.address and self._is_address_correction(normalized_text):
+        street_mentioned = any(
+            self.catalog.street_is_mentioned(street, normalized_text)
+            for street in self.catalog.streets
+        )
+        if self.address and not street_mentioned and self._is_address_correction(normalized_text):
             previous_street = self.address.street
             previous_house = self.address.house
             corpus_only_correction = (
                 "корпус" in normalized_text
                 or "корп " in normalized_text
                 or " к " in normalized_text
-            ) and not any(
-                self.catalog.street_is_mentioned(previous_street, normalized_text)
-                or marker in normalized_text
-                for marker in ("дом ", "д ")
-            )
+            ) and not any(marker in normalized_text for marker in ("дом ", "д "))
             if corpus_only_correction:
                 corrected_houses = self.catalog.find_corpus_correction(
                     previous_street, previous_house, normalized_text
@@ -96,10 +97,6 @@ class Consultation:
                 )
                 self.address_changed_this_turn = True
                 return (self.address,)
-        street_mentioned = any(
-            self.catalog.street_is_mentioned(street, normalized_text)
-            for street in self.catalog.streets
-        )
         if street_mentioned:
             self.address_search_attempted = True
             self.address = None
@@ -113,10 +110,7 @@ class Consultation:
 
     @staticmethod
     def _is_address_correction(text: str) -> bool:
-        return any(
-            marker in text
-            for marker in ("нет", "поправка", "точнее", "ошибся", "ошиблась", "корпус", "корп ", "дом ")
-        )
+        return bool(re.search(r"\b(?:нет|поправка|точнее|ошибся|ошиблась|корпус|корп|дом)\b", text))
 
     def set_address(self, street: str, house: str) -> tuple[AddressMatch, ...]:
         matches = self.catalog.find_houses(street, house)

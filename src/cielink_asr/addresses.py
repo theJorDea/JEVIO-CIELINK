@@ -138,6 +138,14 @@ def _normalize_house_text(value: str) -> str:
     return " ".join(normalized.split())
 
 
+def _house_search_text(text: str) -> str:
+    # Explicit apartment numbers are not candidate buildings.
+    return re.sub(
+        r"\b(?:кв|квартир[аыуе])\s+(?:номер\s+)?\d+[a-zа-я]*\b",
+        "квартира", _normalize(text),
+    )
+
+
 def _house_pattern(label: str) -> str:
     tokens = _normalize_house_text(label).split()
     parts = []
@@ -302,7 +310,7 @@ class AddressCatalog:
 
     def find_mentions(self, text: str) -> tuple[AddressMatch, ...]:
         """Find exact street and house labels explicitly present in a transcript."""
-        normalized_text = _normalize(text)
+        normalized_text = _house_search_text(text)
         corpus_specified = bool(
             re.search(r"\b(?:корп(?:ус)?|к)\b\s*(?:\d+|[a-zа-я]+)", normalized_text)
         )
@@ -326,7 +334,7 @@ class AddressCatalog:
         return tuple(matches)
 
     def find_house_mentions(self, street: Street, text: str) -> tuple[House, ...]:
-        normalized_text = _normalize(text)
+        normalized_text = _house_search_text(text)
         corpus_specified = bool(
             re.search(r"\b(?:корп(?:ус)?|к)\b\s*(?:\d+|[a-zа-я]+)", normalized_text)
         )
@@ -384,18 +392,7 @@ class ConnectionIntake:
     @staticmethod
     def is_new_connection_request(text: str) -> bool:
         normalized = _normalize(text)
-        support_intent = (
-            "не работает",
-            "пропал интернет",
-            "сломался",
-            "плохо работает",
-            "медленный интернет",
-            "техподдерж",
-            "уже абонент",
-            "я абонент",
-            "не подключается",
-        )
-        if any(phrase in normalized for phrase in support_intent):
+        if ConnectionIntake.is_support_request(text):
             return False
         new_connection_intent = (
             "подключ",

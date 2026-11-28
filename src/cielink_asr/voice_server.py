@@ -62,9 +62,13 @@ async def _handle(websocket: Any, catalog: AddressCatalog, llm: Any) -> None:
     async for raw in websocket:
         try:
             event = json.loads(raw)
+            if not isinstance(event, dict):
+                raise ValueError('expected an event object')
             if event.get("type") != "final":
                 continue
-            transcript = str(event.get("text", "")).strip()
+            if not isinstance(event.get('text'), str):
+                raise ValueError('expected transcript text')
+            transcript = event['text'].strip()
             if not transcript:
                 continue
             answer = await asyncio.to_thread(session.reply, transcript)
@@ -78,7 +82,7 @@ async def _handle(websocket: Any, catalog: AddressCatalog, llm: Any) -> None:
                     ensure_ascii=False,
                 )
             )
-        except (json.JSONDecodeError, TypeError, KeyError) as exc:
+        except (ValueError, TypeError, KeyError) as exc:
             await websocket.send(
                 json.dumps({"type": "error", "message": f"invalid voice event: {exc}"})
             )

@@ -198,3 +198,38 @@ def test_consultation_resolves_address_mentioned_in_transcript():
     assert len(matches) == 1
     assert consultation.address.house.id == 4
     assert "дом отмечен как подключённый" in consultation.context_text()
+
+
+def test_changed_street_takes_precedence_over_previous_house_lookup():
+    payload = sample_catalog()
+    payload["homes"][0].append({"id": 6, "t": "1", "s": 0})
+    consultation = Consultation.start(AddressCatalog.from_json(payload))
+    consultation.process("Хочу интернет в квартире, Лесная 14")
+    consultation.process("Нет, Набережная дом 1")
+    assert consultation.address.house.id == 5
+
+
+@pytest.mark.parametrize("previous", [False, True])
+def test_apartment_number_is_not_a_catalog_house(previous):
+    consultation = Consultation.start(AddressCatalog.from_json(sample_catalog()))
+    consultation.process("Хочу интернет в квартире")
+    if previous:
+        consultation.process("Лесная 12")
+    turn = consultation.process("дом 99, квартира 14" if previous else "Лесная дом 99, квартира 14")
+    assert turn.kind.value == "address_unknown"
+    assert consultation.address is None
+
+
+def test_internet_question_preserves_current_address():
+    consultation = Consultation.start(AddressCatalog.from_json(sample_catalog()))
+    consultation.process("Хочу интернет в квартире, Лесная 14")
+    turn = consultation.process("А интернет быстрый?")
+    assert turn.kind.value == "general"
+    assert consultation.address.house.id == 4
+
+
+def test_explicit_second_address_order_starts_intake_for_existing_subscriber():
+    consultation = Consultation.start(AddressCatalog.from_json(sample_catalog()))
+    turn = consultation.process("Я уже абонент, хочу подключить второй адрес")
+    assert turn.kind.value == "ask_object_type"
+    assert consultation.connection_requested

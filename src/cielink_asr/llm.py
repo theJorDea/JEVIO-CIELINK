@@ -65,7 +65,9 @@ class ChatClient:
             provider=provider,
             model=model,
             base_url=os.getenv("CIELINK_LLM_BASE_URL") or None,
-            api_key=os.getenv("CIELINK_LLM_API_KEY") or os.getenv("OPENAI_API_KEY"),
+            api_key=os.getenv("CIELINK_LLM_API_KEY") or (
+                os.getenv("OPENAI_API_KEY") if provider == "openai-compatible" and not os.getenv("CIELINK_LLM_BASE_URL") else None
+            ),
             timeout=timeout,
             keep_alive=os.getenv("CIELINK_LLM_KEEP_ALIVE", "10m"),
             context_length=int(os.getenv("CIELINK_LLM_CONTEXT", "4096")),
